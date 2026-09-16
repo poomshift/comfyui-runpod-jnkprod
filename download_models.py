@@ -13,9 +13,11 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 import traceback
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -143,65 +145,148 @@ def aria2c_command(url, dest_dir, filename):
     ]
 
 
+# aria2c output lines repeated in the failure message.
+_ARIA2C_TAIL_LINES = 40
+
+
+def _kill(process):
+    try:
+        process.kill()
+    except Exception:  # already exited
+        pass
+
+
 async def download_with_aria2c(url, dest_dir, filename):
-    """Run aria2c for one file. Returns True on success."""
+    """Run aria2c for one file, streaming its output to the log. Returns True on success."""
     cmd = aria2c_command(url, dest_dir, filename)
     logger.info("aria2c: %s -> %s/%s", redact_token(url), dest_dir, filename)
 
     try:
         process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            limit=1024 * 1024,
         )
-        stdout, stderr = await process.communicate()
     except Exception as e:  # aria2c missing, etc.
         logger.error("aria2c could not run for %s: %s", filename, redact_token(str(e)))
         return False
 
-    if process.returncode == 0:
+    tail = deque(maxlen=_ARIA2C_TAIL_LINES)
+    try:
+        while True:
+            raw = await process.stdout.readline()
+            if not raw:
+                break
+            # A progress readout can end in \r rather than \n.
+            for line in raw.decode("utf-8", errors="replace").replace("\r", "\n").split("\n"):
+                line = redact_token(line.strip())
+                if line:
+                    tail.append(line)
+                    logger.info("aria2c[%s]: %s", filename, line)
+        returncode = await process.wait()
+    except asyncio.CancelledError:
+        _kill(process)
+        raise
+    except Exception as e:
+        _kill(process)
+        try:
+            await process.wait()
+        except Exception:
+            pass
+        logger.error("aria2c stopped for %s: %s", filename, redact_token(str(e)))
+        return False
+
+    if returncode == 0:
         return True
 
-    output = (stderr or stdout or b"").decode("utf-8", errors="replace")
-    logger.error("aria2c failed for %s (exit %s): %s", filename, process.returncode, redact_token(output.strip()[-2000:]))
+    logger.error("aria2c failed for %s (exit %s): %s", filename, returncode, redact_token("\n".join(tail)))
     return False
 
 
-async def download_job(job, semaphore):
-    """Download one Job, preferring the Hugging Face client where it applies."""
+async def download_job(job, semaphore, in_flight=None):
+    """Download one Job, preferring the Hugging Face client where it applies.
+
+    While it holds the semaphore the job is listed in in_flight as
+    "<category>/<filename>", which is what the heartbeat reports.
+    """
+    if in_flight is None:
+        in_flight = set()
+    name = job.category + "/" + job.filename
+
     async with semaphore:
-        logger.info("Starting %s (%s)", job.filename, job.category)
+        in_flight.add(name)
+        try:
+            return await _download(job)
+        finally:
+            in_flight.discard(name)
 
-        if hf_client_enabled() and parse_hf_url(job.url):
+
+async def _download(job):
+    logger.info("Starting %s (%s)", job.filename, job.category)
+
+    if hf_client_enabled() and parse_hf_url(job.url):
+        try:
+            await asyncio.to_thread(
+                download_via_hf, job.url, str(job.dest_dir), job.filename, _hf_staging_dir()
+            )
+            logger.info("Downloaded %s via the Hugging Face client", job.filename)
+            # A control file left by an earlier, interrupted aria2c attempt
+            # would make every later boot treat this file as partial.
+            control = _aria2_control_file(job.dest_dir, job.filename)
             try:
-                await asyncio.to_thread(
-                    download_via_hf, job.url, str(job.dest_dir), job.filename, _hf_staging_dir()
-                )
-                logger.info("Downloaded %s via the Hugging Face client", job.filename)
-                # A control file left by an earlier, interrupted aria2c attempt
-                # would make every later boot treat this file as partial.
-                control = _aria2_control_file(job.dest_dir, job.filename)
-                try:
-                    control.unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError as e:
-                    logger.warning("Could not remove %s: %s", control, redact_token(str(e)))
-                return True
-            except Exception as e:
-                logger.warning("Hugging Face client failed for %s: %s; falling back to aria2c",
-                               job.filename, redact_token(str(e)))
+                control.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.warning("Could not remove %s: %s", control, redact_token(str(e)))
+            return True
+        except Exception as e:
+            logger.warning("Hugging Face client failed for %s: %s; falling back to aria2c",
+                           job.filename, redact_token(str(e)))
 
-        ok = await download_with_aria2c(job.url, job.dest_dir, job.filename)
-        if ok:
-            logger.info("Downloaded %s via aria2c", job.filename)
-        else:
-            logger.error("FAILED %s (%s)", job.filename, job.category)
-        return ok
+    ok = await download_with_aria2c(job.url, job.dest_dir, job.filename)
+    if ok:
+        logger.info("Downloaded %s via aria2c", job.filename)
+    else:
+        logger.error("FAILED %s (%s)", job.filename, job.category)
+    return ok
+
+
+async def _heartbeat(in_flight, interval):
+    """Log what is still downloading, so a long first download never looks hung."""
+    while True:
+        await asyncio.sleep(interval)
+        if in_flight:
+            names = sorted(in_flight)
+            logger.info("Still downloading %d file(s): %s", len(names), ", ".join(names))
 
 
 async def run_jobs(jobs, max_concurrent):
+    """Run every Job. Returns (succeeded, failed); a job that raises counts as failed."""
     semaphore = asyncio.Semaphore(max_concurrent)
-    results = await asyncio.gather(*(download_job(j, semaphore) for j in jobs))
-    return sum(1 for r in results if r), sum(1 for r in results if not r)
+    in_flight = set()
+    heartbeat = asyncio.create_task(_heartbeat(in_flight, _heartbeat_seconds()))
+    try:
+        results = await asyncio.gather(
+            *(download_job(j, semaphore, in_flight) for j in jobs), return_exceptions=True
+        )
+    finally:
+        heartbeat.cancel()
+        try:
+            await heartbeat
+        except asyncio.CancelledError:
+            pass
+
+    ok = failed = 0
+    for job, result in zip(jobs, results):
+        if isinstance(result, BaseException):
+            failed += 1
+            logger.error("FAILED %s (%s): %s", job.filename, job.category,
+                         redact_token("%s: %s" % (type(result).__name__, result)))
+        elif result:
+            ok += 1
+        else:
+            failed += 1
+    return ok, failed
 
 
 def _configure_logging(log_path):
@@ -236,6 +321,25 @@ def _configure_logging(log_path):
 def _hf_staging_dir():
     """Where the Hugging Face client stages files; start.sh wipes it at boot."""
     return (os.getenv("HF_STAGING_DIR") or "").strip() or "/workspace/.hf_staging"
+
+
+def _heartbeat_seconds(default=60):
+    """Read DOWNLOAD_HEARTBEAT_SECONDS, ignoring blank, non-positive or junk values."""
+    raw = (os.getenv("DOWNLOAD_HEARTBEAT_SECONDS") or "").strip()
+    if not raw:
+        return default
+
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+
+    if value is None or not math.isfinite(value) or value <= 0:
+        logger.warning("DOWNLOAD_HEARTBEAT_SECONDS=%s is not a positive number, using %d",
+                       raw, default)
+        return default
+
+    return value
 
 
 def _max_concurrent_downloads(default=5):

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -256,3 +257,133 @@ def test_configure_logging_survives_an_unwritable_log_path(tmp_path):
         dm.logger.info("still logging")
     finally:
         dm._configure_logging(None)
+
+
+@pytest.fixture
+def dm_log(caplog):
+    """Capture download_models log records even after _configure_logging stopped propagation."""
+    caplog.set_level(logging.INFO, logger="download_models")
+    dm.logger.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        dm.logger.removeHandler(caplog.handler)
+
+
+def _stub_aria2c(monkeypatch, tmp_path, body):
+    """Put a fake aria2c first on PATH. It sees the real argv; $dir/$out are -d/-o."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "aria2c"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'dir=""; out=""\n'
+        'while [ $# -gt 0 ]; do\n'
+        '  case "$1" in -d) dir="$2"; shift ;; -o) out="$2"; shift ;; esac\n'
+        "  shift\n"
+        "done\n" + body
+    )
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
+
+
+def test_download_with_aria2c_streams_output_to_the_log(monkeypatch, tmp_path, dm_log):
+    _stub_aria2c(monkeypatch, tmp_path, (
+        'echo "[#a1b2c3 512MiB/1.0GiB(50%) CN:4 DL:120MiB ETA:4s]"\n'
+        'echo "[#a1b2c3 1.0GiB/1.0GiB(100%) CN:4 DL:121MiB]"\n'
+        'printf model > "$dir/$out"\n'
+        "exit 0\n"
+    ))
+    dest = tmp_path / "models" / "loras"
+    dest.mkdir(parents=True)
+
+    ok = asyncio.run(dm.download_with_aria2c("https://example.com/x.safetensors", dest, "x.safetensors"))
+
+    assert ok is True
+    assert (dest / "x.safetensors").read_text() == "model"
+    assert "aria2c[x.safetensors]: [#a1b2c3 512MiB/1.0GiB(50%) CN:4 DL:120MiB ETA:4s]" in dm_log.text
+    assert "aria2c[x.safetensors]: [#a1b2c3 1.0GiB/1.0GiB(100%) CN:4 DL:121MiB]" in dm_log.text
+
+
+def test_download_with_aria2c_failure_output_is_redacted(monkeypatch, tmp_path, dm_log):
+    token = "civ_streamsecret42"
+    monkeypatch.setenv("CIVITAI_TOKEN", token)
+    _stub_aria2c(monkeypatch, tmp_path, (
+        'echo "errorCode=24 Authorization failed for header Bearer ' + token + '" >&2\n'
+        "exit 1\n"
+    ))
+
+    ok = asyncio.run(dm.download_with_aria2c(
+        "https://civitai.com/api/download/models/1", tmp_path, "y.safetensors"))
+
+    assert ok is False
+    assert token not in dm_log.text
+    assert "aria2c[y.safetensors]: errorCode=24 Authorization failed for header Bearer ***" in dm_log.text
+    assert "aria2c failed for y.safetensors (exit 1)" in dm_log.text
+
+
+def test_download_job_tracks_in_flight_names(monkeypatch, tmp_path):
+    job = dm.Job("loras", "https://civitai.com/api/download/models/1", "l.safetensors", tmp_path)
+    in_flight = set()
+    seen = []
+
+    async def fake_aria(url, dest_dir, filename):
+        seen.append(set(in_flight))
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(dm, "download_with_aria2c", fake_aria)
+    with pytest.raises(RuntimeError):
+        asyncio.run(dm.download_job(job, asyncio.Semaphore(1), in_flight))
+    assert seen == [{"loras/l.safetensors"}]
+    assert in_flight == set()
+
+
+def test_run_jobs_logs_a_heartbeat_while_downloads_run(monkeypatch, tmp_path, dm_log):
+    monkeypatch.setenv("DOWNLOAD_HEARTBEAT_SECONDS", "0.05")
+    jobs = [dm.Job("loras", "https://h/a.safetensors", "a.safetensors", tmp_path),
+            dm.Job("vae", "https://h/b.safetensors", "b.safetensors", tmp_path)]
+
+    async def slow_job(job, semaphore, in_flight):
+        # Registers itself the way the real download_job does, then just waits.
+        async with semaphore:
+            in_flight.add(job.category + "/" + job.filename)
+            try:
+                await asyncio.sleep(0.2)
+                return True
+            finally:
+                in_flight.discard(job.category + "/" + job.filename)
+
+    monkeypatch.setattr(dm, "download_job", slow_job)
+    assert asyncio.run(dm.run_jobs(jobs, 5)) == (2, 0)
+    beats = [r.getMessage() for r in dm_log.records if r.getMessage().startswith("Still downloading")]
+    assert beats, dm_log.text
+    assert beats[0] == "Still downloading 2 file(s): loras/a.safetensors, vae/b.safetensors"
+
+
+def test_run_jobs_counts_a_raising_job_as_failed(monkeypatch, tmp_path, dm_log):
+    token = "hf_gathersecret7"
+    monkeypatch.setenv("HF_TOKEN", token)
+    jobs = [dm.Job("loras", "https://h/bad.safetensors", "bad.safetensors", tmp_path),
+            dm.Job("loras", "https://h/good.safetensors", "good.safetensors", tmp_path)]
+
+    async def fake_job(job, semaphore, in_flight):
+        if job.filename == "bad.safetensors":
+            raise RuntimeError("exploded with " + token)
+        return True
+
+    monkeypatch.setattr(dm, "download_job", fake_job)
+    assert asyncio.run(dm.run_jobs(jobs, 5)) == (1, 1)
+    assert "bad.safetensors" in dm_log.text and "exploded with ***" in dm_log.text
+    assert token not in dm_log.text
+
+
+def test_heartbeat_seconds_ignores_blank_and_junk(monkeypatch):
+    monkeypatch.delenv("DOWNLOAD_HEARTBEAT_SECONDS", raising=False)
+    assert dm._heartbeat_seconds() == 60
+    for bad in ("", "  ", "0", "-1", "soon", "nan", "inf"):
+        monkeypatch.setenv("DOWNLOAD_HEARTBEAT_SECONDS", bad)
+        assert dm._heartbeat_seconds() == 60, bad
+    monkeypatch.setenv("DOWNLOAD_HEARTBEAT_SECONDS", "30")
+    assert dm._heartbeat_seconds() == 30
+    monkeypatch.setenv("DOWNLOAD_HEARTBEAT_SECONDS", "0.05")
+    assert dm._heartbeat_seconds() == 0.05
