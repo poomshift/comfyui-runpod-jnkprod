@@ -70,13 +70,41 @@ print("torch", torch.__version__, "| cuda", torch.version.cuda, "| triton", trit
 assert torch.__version__.startswith("2.13.0"), torch.__version__
 PY
 
-log "Cloning SageAttention ${SAGE_TAG}"
-rm -rf "$WORK/SageAttention"
-git clone -q --depth 1 --branch "$SAGE_TAG" https://github.com/thu-ml/SageAttention "$WORK/SageAttention"
+log "SageAttention ${SAGE_TAG} source"
+# Keep an existing checkout so ninja reuses objects that already compiled
+if [ ! -f "$WORK/SageAttention/setup.py" ]; then
+    git clone -q --depth 1 --branch "$SAGE_TAG" https://github.com/thu-ml/SageAttention "$WORK/SageAttention"
+fi
 cd "$WORK/SageAttention"
+git checkout -q -- setup.py   # start every run from the pristine file, then patch
 # Tag the wheel with the CUDA/torch it was built against so it is never confused with other builds
 sed -i "s/version='2.2.0'/version='2.2.0+${LOCAL_VERSION}'/" setup.py
 grep -q "2.2.0+${LOCAL_VERSION}" setup.py
+# Upstream compiles the Hopper-only _qattn_sm90 extension (wgmma, TMA) with every
+# -gencode in the list, which ptxas rejects for sm_80/86/89/120. Give it sm_90a only.
+python - <<'PATCH'
+import re
+s = open("setup.py").read()
+helper = """
+    # Hopper-only extension: strip every -gencode pair and keep sm_90a
+    _base = []
+    _it = iter(NVCC_FLAGS)
+    for _f in _it:
+        if _f == "-gencode":
+            next(_it, None)
+            continue
+        _base.append(_f)
+    NVCC_FLAGS_SM90 = _base + ["-gencode", "arch=compute_90a,code=sm_90a"]
+
+    # Fused kernels and QAttn variants"""
+assert "    # Fused kernels and QAttn variants" in s
+s = s.replace("    # Fused kernels and QAttn variants", helper, 1)
+i = s.index('name="sageattention._qattn_sm90"')
+j = s.index('"nvcc": NVCC_FLAGS}', i)
+s = s[:j] + '"nvcc": NVCC_FLAGS_SM90}' + s[j + len('"nvcc": NVCC_FLAGS}'):]
+open("setup.py", "w").write(s)
+print("patched setup.py: _qattn_sm90 now builds for sm_90a only")
+PATCH
 
 log "Building wheel for arches: ${ARCH_LIST} (this takes 10-30 min)"
 export TORCH_CUDA_ARCH_LIST="$ARCH_LIST"
