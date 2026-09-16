@@ -2,6 +2,7 @@
 import os
 import re
 import shutil
+import tempfile
 from urllib.parse import unquote, urlparse
 
 from utils.hfAuth import get_hf_token
@@ -70,9 +71,11 @@ def download_via_hf(url, output_dir, filename, staging_root="/workspace/.hf_stag
     if info is None:
         raise ValueError("not a Hugging Face resolve URL: " + url)
 
-    # Staged separately so the client's .cache metadata never lands in models/
-    staging = os.path.join(staging_root, re.sub(r"[^\w.-]", "_", filename))
-    os.makedirs(staging, exist_ok=True)
+    # Staged separately so the client's .cache metadata never lands in models/.
+    # Each call gets its own temp dir so concurrent downloads that share a
+    # filename (different model categories) never race on rmtree.
+    os.makedirs(staging_root, exist_ok=True)
+    staging = tempfile.mkdtemp(prefix=re.sub(r"[^\w.-]", "_", filename) + ".", dir=staging_root)
 
     try:
         staged_path = huggingface_hub.hf_hub_download(

@@ -60,7 +60,7 @@ def test_download_via_hf_moves_file_into_place_and_cleans_staging(tmp_path, monk
     assert calls["repo_id"] == "Comfy-Org/flux2-dev"
     assert calls["filename"] == "split_files/vae/flux2-vae.safetensors"
     assert calls["token"] == "hf_x"
-    assert not (staging / "flux2-vae.safetensors").exists()
+    assert list(staging.iterdir()) == []
 
 
 def test_download_via_hf_rejects_non_hf_url(tmp_path):
