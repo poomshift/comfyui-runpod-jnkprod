@@ -1,0 +1,62 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The image is ~12 GB and BuildKit needs several times that while it
+      # builds. Free the root disk, then put Docker's data (images and the
+      # buildx builder's cache) on the larger /mnt disk. Must run before buildx
+      # creates its builder container.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/.ghcup /opt/hostedtoolcache /usr/share/swift /usr/local/share/boost
+          sudo docker image prune -af
+          sudo systemctl stop docker
+          sudo mkdir -p /mnt/docker
+          # Merge into the runner's daemon.json so its existing settings survive.
+          sudo sh -c 'f=/etc/docker/daemon.json; mkdir -p /etc/docker; [ -f "$f" ] || echo "{}" > "$f"; jq ". + {\"data-root\": \"/mnt/docker\"}" "$f" > /tmp/daemon.json && mv /tmp/daemon.json "$f"'
+          cat /etc/docker/daemon.json
+          sudo systemctl start docker
+          df -h / /mnt
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            promptalchemist/comfyui-runpod-jnkprod:latest
+            promptalchemist/comfyui-runpod-jnkprod:${{ steps.date.outputs.date }}
+          build-args: |
+            SAGEATTENTION_WHEEL_URL=${{ vars.SAGEATTENTION_WHEEL_URL || 'https://huggingface.co/Patarapoom/sageattention-wheels/resolve/main/sageattention-2.2.0+cu130.torch2.13.0-cp312-cp312-linux_x86_64.whl' }}
+          secrets: |
+            github_token=${{ secrets.ONYX_GITHUB_TOKEN }}
+          # Registry cache: the GHA cache's 10 GB limit is smaller than this
+          # image's layers. PR builds read it but never write it.
+          cache-from: type=registry,ref=promptalchemist/comfyui-runpod-jnkprod:buildcache
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=promptalchemist/comfyui-runpod-jnkprod:buildcache,mode=max' || '' }}

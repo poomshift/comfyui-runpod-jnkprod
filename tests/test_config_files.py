@@ -1,0 +1,72 @@
+import json
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+
+# Every folder name ComfyUI v0.36.0 knows, minus custom_nodes (stays in the image)
+COMFY_MODEL_FOLDERS = {
+    "audio_encoders", "background_removal", "checkpoints", "classifiers",
+    "clip_vision", "configs", "controlnet", "datasets", "detection",
+    "diffusers", "diffusion_models", "embeddings", "frame_interpolation",
+    "geometry_estimation", "gligen", "hypernetworks", "latent_upscale_models",
+    "loras", "model_patches", "optical_flow", "photomaker", "style_models",
+    "text_encoders", "upscale_models", "vae", "vae_approx",
+}
+
+
+def test_constraints_pin_torch_stack():
+    text = (ROOT / "constraints.txt").read_text()
+    for line in (
+        "torch==2.13.0+cu130",
+        "torchvision==0.28.0+cu130",
+        "torchaudio==2.11.0+cu130",
+        "triton==3.7.1",
+        "numpy>=2,<3",
+    ):
+        assert line in text.splitlines(), line
+
+
+def test_extra_model_paths_cover_every_comfy_folder():
+    cfg = yaml.safe_load((ROOT / "extra_model_paths.yaml").read_text())
+    section = cfg["runpod"]
+    assert section["base_path"] == "/workspace/models"
+    assert section["is_default"] is True
+    folders = {k for k in section if k not in ("base_path", "is_default")}
+    assert folders == COMFY_MODEL_FOLDERS
+    for name in folders:
+        assert section[name] == name, f"{name} must map to a folder of the same name"
+
+
+def test_models_config_entries_are_well_formed():
+    cfg = json.loads((ROOT / "models_config.json").read_text())
+    assert set(cfg) <= COMFY_MODEL_FOLDERS
+    for category, entries in cfg.items():
+        assert isinstance(entries, list), category
+        for entry in entries:
+            if isinstance(entry, str):
+                assert entry.startswith("https://")
+                assert entry.rsplit("/", 1)[-1].endswith(".safetensors")
+            else:
+                assert set(entry) == {"url", "filename"}, entry
+                assert entry["url"].startswith("https://")
+                assert entry["filename"].endswith(".safetensors")
+
+
+def test_models_config_lists_the_customer_files():
+    cfg = json.loads((ROOT / "models_config.json").read_text())
+    names = set()
+    for entries in cfg.values():
+        for entry in entries:
+            names.add(entry if isinstance(entry, str) else entry["filename"])
+    for expected in (
+        "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/resolve/main/flux-2-klein-9b.safetensors",
+        "https://huggingface.co/kiwidebringue/QwenTextencoder/resolve/main/qwen3vl_8b_fp8_scaled.safetensors",
+        "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+        "https://huggingface.co/kiwidebringue/kleini2i/resolve/main/Klein_realistic_I2I.safetensors",
+        "HighResolution9B.safetensors",
+        "Samsung_fluxklein9b.safetensors",
+        "f2k_9B_lcs_consist_20260415.safetensors",
+    ):
+        assert expected in names, expected

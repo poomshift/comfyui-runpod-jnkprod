@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""Boot-time model downloader.
+
+Reads a models_config.json (category -> list of entries), downloads every file
+that is not already under <models-dir>/<category>/, and logs to LOG_PATH and
+stdout. Hugging Face resolve URLs go through the official client (Xet where
+the repo has it) and fall back to aria2c; everything else uses aria2c.
+
+Exit code is 0 even when downloads fail, so ComfyUI still starts; 1 only when
+the config cannot be read.
+"""
+import argparse
+import asyncio
+import json
+import logging
+import math
+import os
+import sys
+import traceback
+from collections import deque
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+from urllib.request import urlopen
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from utils.civitai import civitai_auth_args  # noqa: E402
+from utils.hfAuth import hf_auth_args, redact_token  # noqa: E402
+from utils.hfDownload import download_via_hf, hf_client_enabled, parse_hf_url  # noqa: E402
+
+logger = logging.getLogger("download_models")
+
+
+@dataclass
+class Job:
+    category: str
+    url: str
+    filename: str
+    dest_dir: Path
+
+
+def parse_entry(entry):
+    """Return (url, filename) for a config entry.
+
+    A string entry is a URL whose last path segment is the filename. An object
+    entry carries an explicit filename, for URLs like Civitai's whose path ends
+    in an id rather than a name.
+    """
+    if isinstance(entry, str):
+        url = entry
+        filename = unquote(urlparse(url).path.rsplit("/", 1)[-1])
+    elif isinstance(entry, dict):
+        url = entry.get("url")
+        filename = entry.get("filename")
+        if not url or not filename:
+            raise ValueError("object entries need both 'url' and 'filename': %r" % (entry,))
+    else:
+        raise ValueError("entry must be a URL string or an object: %r" % (entry,))
+
+    if not filename or "/" in filename or filename in (".", ".."):
+        raise ValueError("invalid filename %r for %s" % (filename, url))
+
+    return url, filename
+
+
+def load_config(path_or_url):
+    """Load the config from a local path or an http(s) URL. Keeps only list values."""
+    if path_or_url.startswith(("http://", "https://")):
+        with urlopen(path_or_url, timeout=30) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    else:
+        with open(path_or_url, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+    config = {}
+    for key, value in raw.items():
+        if isinstance(value, list):
+            config[key] = value
+        else:
+            # Dropped here rather than in plan_downloads, so say so out loud:
+            # a typo'd category would otherwise cost a silently missing model.
+            logger.warning("Ignoring '%s': not a list", key)
+
+    return config
+
+
+def _aria2_control_file(dest_dir, filename):
+    return Path(dest_dir) / (filename + ".aria2")
+
+
+def plan_downloads(config, models_dir, force=False):
+    """Turn the config into Jobs, creating category dirs and skipping present files."""
+    models_dir = Path(models_dir)
+    jobs = []
+
+    for category, entries in config.items():
+        if not isinstance(entries, list):
+            logger.warning("Skipping '%s': not a list", category)
+            continue
+
+        dest_dir = models_dir / category
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        for entry in entries:
+            try:
+                url, filename = parse_entry(entry)
+            except ValueError as e:
+                logger.error("Skipping bad entry in '%s': %s", category, redact_token(str(e)))
+                continue
+
+            if not force and (dest_dir / filename).exists():
+                # aria2c keeps <file>.aria2 next to a download until it is
+                # complete, so a file with one is a partial that -c resumes.
+                if not _aria2_control_file(dest_dir, filename).exists():
+                    logger.info("Skipping %s, already present in %s", filename, category)
+                    continue
+                logger.info("Resuming partial download of %s", filename)
+
+            jobs.append(Job(category, url, filename, dest_dir))
+
+    return jobs
+
+
+def aria2c_command(url, dest_dir, filename):
+    """Build the aria2c command, adding the auth header that matches the host."""
+    return [
+        "aria2c",
+        *hf_auth_args(url),
+        *civitai_auth_args(url),
+        "--console-log-level=warn",
+        # Its output is streamed into the log, so skip the once-a-second
+        # readout and keep only the --summary-interval summaries.
+        "--show-console-readout=false",
+        "-c",
+        "-x", "4",
+        "-s", "4",
+        "-k", "1M",
+        "--file-allocation=none",
+        "--max-tries=5",
+        "--retry-wait=10",
+        "--connect-timeout=30",
+        "--timeout=600",
+        "--summary-interval=30",
+        url,
+        "-d", str(dest_dir),
+        "-o", filename,
+    ]
+
+
+# aria2c output lines repeated in the failure message.
+_ARIA2C_TAIL_LINES = 40
+
+
+def _kill(process):
+    try:
+        process.kill()
+    except Exception:  # already exited
+        pass
+
+
+async def download_with_aria2c(url, dest_dir, filename):
+    """Run aria2c for one file, streaming its output to the log. Returns True on success."""
+    cmd = aria2c_command(url, dest_dir, filename)
+    logger.info("aria2c: %s -> %s/%s", redact_token(url), dest_dir, filename)
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            limit=1024 * 1024,
+        )
+    except Exception as e:  # aria2c missing, etc.
+        logger.error("aria2c could not run for %s: %s", filename, redact_token(str(e)))
+        return False
+
+    tail = deque(maxlen=_ARIA2C_TAIL_LINES)
+    try:
+        while True:
+            raw = await process.stdout.readline()
+            if not raw:
+                break
+            # A progress readout can end in \r rather than \n.
+            for line in raw.decode("utf-8", errors="replace").replace("\r", "\n").split("\n"):
+                line = redact_token(line.strip())
+                if line:
+                    tail.append(line)
+                    logger.info("aria2c[%s]: %s", filename, line)
+        returncode = await process.wait()
+    except asyncio.CancelledError:
+        _kill(process)
+        raise
+    except Exception as e:
+        _kill(process)
+        try:
+            await process.wait()
+        except Exception:
+            pass
+        logger.error("aria2c stopped for %s: %s", filename, redact_token(str(e)))
+        return False
+
+    if returncode == 0:
+        return True
+
+    logger.error("aria2c failed for %s (exit %s): %s", filename, returncode, redact_token("\n".join(tail)))
+    return False
+
+
+async def download_job(job, semaphore, in_flight=None):
+    """Download one Job, preferring the Hugging Face client where it applies.
+
+    While it holds the semaphore the job is listed in in_flight as
+    "<category>/<filename>", which is what the heartbeat reports.
+    """
+    if in_flight is None:
+        in_flight = set()
+    name = job.category + "/" + job.filename
+
+    async with semaphore:
+        in_flight.add(name)
+        try:
+            return await _download(job)
+        finally:
+            in_flight.discard(name)
+
+
+async def _download(job):
+    logger.info("Starting %s (%s)", job.filename, job.category)
+
+    if hf_client_enabled() and parse_hf_url(job.url):
+        try:
+            await asyncio.to_thread(
+                download_via_hf, job.url, str(job.dest_dir), job.filename, _hf_staging_dir()
+            )
+            logger.info("Downloaded %s via the Hugging Face client", job.filename)
+            # A control file left by an earlier, interrupted aria2c attempt
+            # would make every later boot treat this file as partial.
+            control = _aria2_control_file(job.dest_dir, job.filename)
+            try:
+                control.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.warning("Could not remove %s: %s", control, redact_token(str(e)))
+            return True
+        except Exception as e:
+            logger.warning("Hugging Face client failed for %s: %s; falling back to aria2c",
+                           job.filename, redact_token(str(e)))
+
+    ok = await download_with_aria2c(job.url, job.dest_dir, job.filename)
+    if ok:
+        logger.info("Downloaded %s via aria2c", job.filename)
+    else:
+        logger.error("FAILED %s (%s)", job.filename, job.category)
+    return ok
+
+
+async def _heartbeat(in_flight, interval):
+    """Log what is still downloading, so a long first download never looks hung."""
+    while True:
+        await asyncio.sleep(interval)
+        if in_flight:
+            names = sorted(in_flight)
+            logger.info("Still downloading %d file(s): %s", len(names), ", ".join(names))
+
+
+async def run_jobs(jobs, max_concurrent):
+    """Run every Job. Returns (succeeded, failed); a job that raises counts as failed."""
+    semaphore = asyncio.Semaphore(max_concurrent)
+    in_flight = set()
+    heartbeat = asyncio.create_task(_heartbeat(in_flight, _heartbeat_seconds()))
+    try:
+        results = await asyncio.gather(
+            *(download_job(j, semaphore, in_flight) for j in jobs), return_exceptions=True
+        )
+    finally:
+        heartbeat.cancel()
+        try:
+            await heartbeat
+        except asyncio.CancelledError:
+            pass
+
+    ok = failed = 0
+    for job, result in zip(jobs, results):
+        if isinstance(result, BaseException):
+            failed += 1
+            logger.error("FAILED %s (%s): %s", job.filename, job.category,
+                         redact_token("%s: %s" % (type(result).__name__, result)))
+        elif result:
+            ok += 1
+        else:
+            failed += 1
+    return ok, failed
+
+
+def _configure_logging(log_path):
+    """Log to stdout and LOG_PATH, exactly once per line and only from our logger."""
+    fmt = logging.Formatter("[download] %(message)s")
+    logger.setLevel(logging.INFO)
+    # Our records never reach the root handlers, so nothing is ever logged twice.
+    logger.propagate = False
+
+    # Closed before being dropped, so a second call cannot leak the open log file.
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(fmt)
+    logger.addHandler(stdout_handler)
+
+    if log_path:
+        try:
+            os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        except OSError as e:
+            # A read-only or missing volume must not stop the boot downloader.
+            logger.warning("Logging to stdout only, cannot write %s: %s",
+                           log_path, redact_token(str(e)))
+        else:
+            file_handler.setFormatter(fmt)
+            logger.addHandler(file_handler)
+
+
+def _hf_staging_dir():
+    """Where the Hugging Face client stages files; start.sh wipes it at boot."""
+    return (os.getenv("HF_STAGING_DIR") or "").strip() or "/workspace/.hf_staging"
+
+
+def _heartbeat_seconds(default=60):
+    """Read DOWNLOAD_HEARTBEAT_SECONDS, ignoring blank, non-positive or junk values."""
+    raw = (os.getenv("DOWNLOAD_HEARTBEAT_SECONDS") or "").strip()
+    if not raw:
+        return default
+
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+
+    if value is None or not math.isfinite(value) or value <= 0:
+        logger.warning("DOWNLOAD_HEARTBEAT_SECONDS=%s is not a positive number, using %d",
+                       raw, default)
+        return default
+
+    return value
+
+
+def _max_concurrent_downloads(default=5):
+    """Read MAX_CONCURRENT_DOWNLOADS, ignoring blank or nonsensical values.
+
+    Pod templates often declare the variable with an empty value, and 0 would
+    build a semaphore nobody can acquire, so anything below 1 falls back.
+    """
+    raw = (os.getenv("MAX_CONCURRENT_DOWNLOADS") or "").strip()
+    if not raw:
+        return default
+
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+
+    if value is None or value < 1:
+        logger.warning("MAX_CONCURRENT_DOWNLOADS=%s is not a positive integer, using %d",
+                       raw, default)
+        return default
+
+    return value
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, help="models_config.json path or URL")
+    parser.add_argument("--models-dir", required=True, help="ComfyUI models root, e.g. /workspace/models")
+    parser.add_argument("--force", action="store_true", help="re-download files that already exist")
+    args = parser.parse_args(argv)
+
+    _configure_logging(os.getenv("LOG_PATH", "/workspace/logs/comfyui.log"))
+
+    if (os.getenv("SKIP_MODEL_DOWNLOAD") or "").strip().lower() == "true":
+        logger.info("SKIP_MODEL_DOWNLOAD=true, not downloading anything")
+        return 0
+
+    try:
+        config = load_config(args.config)
+    except Exception as e:
+        logger.error("Cannot read config %s: %s", redact_token(args.config), redact_token(str(e)))
+        return 1
+
+    try:
+        jobs = plan_downloads(config, args.models_dir, force=args.force)
+        if not jobs:
+            logger.info("All models present, nothing to download")
+            return 0
+
+        max_concurrent = _max_concurrent_downloads()
+        logger.info("Downloading %d file(s), up to %d at a time", len(jobs), max_concurrent)
+        ok, failed = asyncio.run(run_jobs(jobs, max_concurrent))
+        logger.info("Done: %d succeeded, %d failed", ok, failed)
+    except Exception:
+        # ComfyUI still has to start, so no surprise below the config load is fatal.
+        logger.error("Downloads stopped early: %s", redact_token(traceback.format_exc()))
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,32 @@
+# Loaded by ComfyUI from /opt/ComfyUI/extra_model_paths.yaml.
+# Every model folder lives on the RunPod volume so downloads survive restarts.
+# is_default makes these folders the first search path and the download target.
+runpod:
+  base_path: /workspace/models
+  is_default: true
+  audio_encoders: audio_encoders
+  background_removal: background_removal
+  checkpoints: checkpoints
+  classifiers: classifiers
+  clip_vision: clip_vision
+  configs: configs
+  controlnet: controlnet
+  datasets: datasets
+  detection: detection
+  diffusers: diffusers
+  diffusion_models: diffusion_models
+  embeddings: embeddings
+  frame_interpolation: frame_interpolation
+  geometry_estimation: geometry_estimation
+  gligen: gligen
+  hypernetworks: hypernetworks
+  latent_upscale_models: latent_upscale_models
+  loras: loras
+  model_patches: model_patches
+  optical_flow: optical_flow
+  photomaker: photomaker
+  style_models: style_models
+  text_encoders: text_encoders
+  upscale_models: upscale_models
+  vae: vae
+  vae_approx: vae_approx

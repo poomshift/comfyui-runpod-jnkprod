@@ -1,0 +1,8 @@
+# Pins passed as `-c` to every pip install in the Dockerfile so that no custom
+# node requirement can replace the CUDA 13 torch stack.
+torch==2.13.0+cu130
+torchvision==0.28.0+cu130
+torchaudio==2.11.0+cu130
+triton==3.7.1
+# The torch 2.13 wheels are built against numpy 2; a node asking for numpy<2 must fail the build, not break torch.
+numpy>=2,<3
