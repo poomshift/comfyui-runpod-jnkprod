@@ -58,9 +58,9 @@ Tokens are only sent to their own site and never written to the logs.
 1. JupyterLab is up within seconds on port 8888.
 2. The missing models are downloaded to `/workspace/models` (about 30 GB in
    total). Watch progress in a JupyterLab terminal:
-   `tail -f /workspace/logs/comfyui.log`. aria2c progress lines appear as
-   they happen, and a `Still downloading` line lists the files in flight
-   every `DOWNLOAD_HEARTBEAT_SECONDS` (default 60).
+   `tail -f /workspace/logs/comfyui.log`. aria2c downloads log a progress
+   summary every 30 seconds, and a `Still downloading` line lists the files
+   in flight every `DOWNLOAD_HEARTBEAT_SECONDS` (default 60).
 3. ComfyUI starts on port 8188 once the downloads have finished. Its startup
    command line is written to `/workspace/logs/comfyui.log`, so you can check
    there to confirm `--use-sage-attention` is active. If ComfyUI crashes, it
