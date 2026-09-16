@@ -62,13 +62,15 @@ RUN --mount=type=secret,id=github_token \
 # 6. Node dependencies, one install per requirements.txt so a failure names the node.
 #    Then collapse the three OpenCV variants the nodes ask for into one package:
 #    they all unpack into the same cv2/ directory and pip does not de-duplicate.
+#    `uv pip uninstall` with no names is an error, hence the guard.
 RUN set -e; for req in */requirements.txt; do \
         echo "==> $req"; uv pip install -c /app/constraints.txt -r "$req"; \
     done; \
     for inst in */install.py; do \
         [ -f "$inst" ] || continue; echo "==> $inst"; (cd "$(dirname "$inst")" && python install.py); \
     done; \
-    uv pip uninstall $(uv pip freeze | grep -iE '^opencv' | cut -d= -f1); \
+    pkgs=$(uv pip freeze | grep -iE '^opencv' | cut -d= -f1 || true); \
+    if [ -n "$pkgs" ]; then uv pip uninstall $pkgs; fi; \
     uv pip install -c /app/constraints.txt opencv-contrib-python-headless
 
 # 7. Services and downloader dependencies.

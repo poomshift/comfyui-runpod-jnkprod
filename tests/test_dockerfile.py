@@ -1,4 +1,8 @@
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,3 +45,44 @@ def test_dockerignore_excludes_dev_files():
     text = (ROOT / ".dockerignore").read_text().splitlines()
     for pattern in (".git", ".venv", "tests", "docs", "scripts", ".github", "__pycache__", "*.pyc"):
         assert pattern in text, pattern
+
+
+def _run_bodies():
+    """Shell bodies of every RUN instruction, with continuations joined and flags dropped."""
+    logical, current = [], ""
+    for line in (ROOT / "Dockerfile").read_text().splitlines():
+        if not current and (not line.strip() or line.lstrip().startswith("#")):
+            continue
+        if line.endswith("\\"):
+            current += line[:-1]
+            continue
+        logical.append(current + line)
+        current = ""
+    bodies = []
+    for instruction in logical:
+        if not instruction.startswith("RUN "):
+            continue
+        body = instruction[len("RUN "):].lstrip()
+        while body.startswith("--"):
+            body = body.split(None, 1)[1]
+        bodies.append(body)
+    return bodies
+
+
+@pytest.mark.skipif(shutil.which("dash") is None and shutil.which("sh") is None, reason="needs a POSIX sh")
+def test_run_bodies_are_valid_posix_sh(tmp_path):
+    shell = shutil.which("dash") or shutil.which("sh")
+    bodies = _run_bodies()
+    assert len(bodies) >= 8
+    for i, body in enumerate(bodies):
+        script = tmp_path / f"run{i}.sh"
+        script.write_text(body + "\n")
+        r = subprocess.run([shell, "-n", str(script)], capture_output=True, text=True, check=False)
+        assert r.returncode == 0, (body, r.stderr)
+
+
+def test_opencv_uninstall_is_skipped_when_nothing_matches():
+    body = next(b for b in _run_bodies() if "opencv-contrib-python-headless" in b)
+    assert "pkgs=$(uv pip freeze | grep -iE '^opencv' | cut -d= -f1 || true)" in body
+    assert 'if [ -n "$pkgs" ]; then uv pip uninstall $pkgs; fi' in body
+    assert "uv pip uninstall $(" not in body
