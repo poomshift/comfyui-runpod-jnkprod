@@ -80,12 +80,26 @@ grep -q "2.2.0+${LOCAL_VERSION}" setup.py
 
 log "Building wheel for arches: ${ARCH_LIST} (this takes 10-30 min)"
 export TORCH_CUDA_ARCH_LIST="$ARCH_LIST"
-# EXT_PARALLEL extensions build at once, each with MAX_JOBS nvcc processes.
-# Keep the product near the core count so the pod does not run out of RAM.
-export EXT_PARALLEL="${EXT_PARALLEL:-2}"
-export MAX_JOBS="${MAX_JOBS:-$(( $(nproc) / EXT_PARALLEL ))}"
+# nproc/free report the host, not the pod. Read the cgroup limits instead, and
+# budget ~3 GB per nvcc process, otherwise the kernel OOM-kills the compilers.
+cg_cpus=$(nproc)
+if read -r quota period < /sys/fs/cgroup/cpu.max 2>/dev/null && [ "$quota" != "max" ]; then
+    cg_cpus=$(( (quota + period - 1) / period ))
+fi
+cg_mem_gb=$(free -g | awk '/Mem/{print $2}')
+if mem_max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null) && [ "$mem_max" != "max" ]; then
+    cg_mem_gb=$(( mem_max / 1024 / 1024 / 1024 ))
+fi
+jobs_by_mem=$(( cg_mem_gb / 3 ))
+export EXT_PARALLEL="${EXT_PARALLEL:-1}"
+if [ -z "${MAX_JOBS:-}" ]; then
+    MAX_JOBS=$cg_cpus
+    [ "$jobs_by_mem" -lt "$MAX_JOBS" ] && MAX_JOBS=$jobs_by_mem
+    MAX_JOBS=$(( MAX_JOBS / EXT_PARALLEL ))
+fi
 [ "$MAX_JOBS" -ge 2 ] || MAX_JOBS=2
-echo "nproc=$(nproc) EXT_PARALLEL=$EXT_PARALLEL MAX_JOBS=$MAX_JOBS RAM=$(free -g | awk '/Mem/{print $2}')G"
+export MAX_JOBS
+echo "pod limits: cpus=$cg_cpus ram=${cg_mem_gb}G -> EXT_PARALLEL=$EXT_PARALLEL MAX_JOBS=$MAX_JOBS"
 rm -f "$OUT"/sageattention-*.whl
 BUILD_LOG=$WORK/pip-wheel.log
 if ! (time pip wheel . --no-build-isolation --no-deps -v -w "$OUT") >"$BUILD_LOG" 2>&1; then
