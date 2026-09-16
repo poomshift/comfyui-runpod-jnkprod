@@ -24,7 +24,9 @@ jobs:
           sudo docker image prune -af
           sudo systemctl stop docker
           sudo mkdir -p /mnt/docker
-          echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          # Merge into the runner's daemon.json so its existing settings survive.
+          sudo sh -c 'f=/etc/docker/daemon.json; mkdir -p /etc/docker; [ -f "$f" ] || echo "{}" > "$f"; jq ". + {\"data-root\": \"/mnt/docker\"}" "$f" > /tmp/daemon.json && mv /tmp/daemon.json "$f"'
+          cat /etc/docker/daemon.json
           sudo systemctl start docker
           df -h / /mnt
 

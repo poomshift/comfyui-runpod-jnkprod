@@ -44,6 +44,9 @@ def test_docker_workflow_frees_disk_before_buildx_and_uses_registry_cache():
     run = steps[cleanup]["run"]
     assert "/opt/hostedtoolcache" in run
     assert "data-root" in run and "/mnt/docker" in run
+    # Merged into the runner's existing daemon.json, never overwritten.
+    assert "jq " in run
+    assert "tee /etc/docker/daemon.json" not in run
 
     w = next(s for s in steps if s.get("uses", "").startswith("docker/build-push-action"))["with"]
     assert w["cache-from"] == "type=registry,ref=promptalchemist/comfyui-runpod-jnkprod:buildcache"
