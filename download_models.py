@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -70,7 +71,16 @@ def load_config(path_or_url):
         with open(path_or_url, "r", encoding="utf-8") as f:
             raw = json.load(f)
 
-    return {k: v for k, v in raw.items() if isinstance(v, list)}
+    config = {}
+    for key, value in raw.items():
+        if isinstance(value, list):
+            config[key] = value
+        else:
+            # Dropped here rather than in plan_downloads, so say so out loud:
+            # a typo'd category would otherwise cost a silently missing model.
+            logger.warning("Ignoring '%s': not a list", key)
+
+    return config
 
 
 def plan_downloads(config, models_dir, force=False):
@@ -90,7 +100,7 @@ def plan_downloads(config, models_dir, force=False):
             try:
                 url, filename = parse_entry(entry)
             except ValueError as e:
-                logger.error("Skipping bad entry in '%s': %s", category, e)
+                logger.error("Skipping bad entry in '%s': %s", category, redact_token(str(e)))
                 continue
 
             if (dest_dir / filename).exists() and not force:
@@ -194,10 +204,39 @@ def _configure_logging(log_path):
     logger.addHandler(stdout_handler)
 
     if log_path:
-        os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
-        file_handler = logging.FileHandler(log_path, encoding="utf-8")
-        file_handler.setFormatter(fmt)
-        logger.addHandler(file_handler)
+        try:
+            os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        except OSError as e:
+            # A read-only or missing volume must not stop the boot downloader.
+            logger.warning("Logging to stdout only, cannot write %s: %s",
+                           log_path, redact_token(str(e)))
+        else:
+            file_handler.setFormatter(fmt)
+            logger.addHandler(file_handler)
+
+
+def _max_concurrent_downloads(default=5):
+    """Read MAX_CONCURRENT_DOWNLOADS, ignoring blank or nonsensical values.
+
+    Pod templates often declare the variable with an empty value, and 0 would
+    build a semaphore nobody can acquire, so anything below 1 falls back.
+    """
+    raw = (os.getenv("MAX_CONCURRENT_DOWNLOADS") or "").strip()
+    if not raw:
+        return default
+
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+
+    if value is None or value < 1:
+        logger.warning("MAX_CONCURRENT_DOWNLOADS=%s is not a positive integer, using %d",
+                       raw, default)
+        return default
+
+    return value
 
 
 def main(argv=None):
@@ -216,18 +255,23 @@ def main(argv=None):
     try:
         config = load_config(args.config)
     except Exception as e:
-        logger.error("Cannot read config %s: %s", args.config, redact_token(str(e)))
+        logger.error("Cannot read config %s: %s", redact_token(args.config), redact_token(str(e)))
         return 1
 
-    jobs = plan_downloads(config, args.models_dir, force=args.force)
-    if not jobs:
-        logger.info("All models present, nothing to download")
-        return 0
+    try:
+        jobs = plan_downloads(config, args.models_dir, force=args.force)
+        if not jobs:
+            logger.info("All models present, nothing to download")
+            return 0
 
-    max_concurrent = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "5"))
-    logger.info("Downloading %d file(s), up to %d at a time", len(jobs), max_concurrent)
-    ok, failed = asyncio.run(run_jobs(jobs, max_concurrent))
-    logger.info("Done: %d succeeded, %d failed", ok, failed)
+        max_concurrent = _max_concurrent_downloads()
+        logger.info("Downloading %d file(s), up to %d at a time", len(jobs), max_concurrent)
+        ok, failed = asyncio.run(run_jobs(jobs, max_concurrent))
+        logger.info("Done: %d succeeded, %d failed", ok, failed)
+    except Exception:
+        # ComfyUI still has to start, so no surprise below the config load is fatal.
+        logger.error("Downloads stopped early: %s", redact_token(traceback.format_exc()))
+
     return 0
 
 
