@@ -30,3 +30,24 @@ def test_docker_workflow_pushes_only_on_main():
     assert "SAGEATTENTION_WHEEL_URL=" in w["build-args"]
     assert w["push"] == "${{ github.event_name != 'pull_request' }}"
     assert any("rm -rf /usr/share/dotnet" in (s.get("run") or "") for s in build["steps"])
+
+
+def test_docker_workflow_frees_disk_before_buildx_and_uses_registry_cache():
+    raw = (ROOT / ".github" / "workflows" / "docker-build.yml").read_text()
+    assert "type=gha" not in raw
+    assert "AGENT_TOOLSDIRECTORY" not in raw
+
+    steps = _load("docker-build.yml")["jobs"]["build"]["steps"]
+    cleanup = next(i for i, s in enumerate(steps) if "rm -rf /usr/share/dotnet" in (s.get("run") or ""))
+    buildx = next(i for i, s in enumerate(steps) if s.get("uses", "").startswith("docker/setup-buildx-action"))
+    assert cleanup < buildx
+    run = steps[cleanup]["run"]
+    assert "/opt/hostedtoolcache" in run
+    assert "data-root" in run and "/mnt/docker" in run
+
+    w = next(s for s in steps if s.get("uses", "").startswith("docker/build-push-action"))["with"]
+    assert w["cache-from"] == "type=registry,ref=promptalchemist/comfyui-runpod-jnkprod:buildcache"
+    assert w["cache-to"] == (
+        "${{ github.event_name != 'pull_request' && "
+        "'type=registry,ref=promptalchemist/comfyui-runpod-jnkprod:buildcache,mode=max' || '' }}"
+    )

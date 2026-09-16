@@ -14,12 +14,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # The image is ~12 GB; the free runner needs the space these take.
+      # The image is ~12 GB and BuildKit needs several times that while it
+      # builds. Free the root disk, then put Docker's data (images and the
+      # buildx builder's cache) on the larger /mnt disk. Must run before buildx
+      # creates its builder container.
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/.ghcup /opt/hostedtoolcache /usr/share/swift /usr/local/share/boost
           sudo docker image prune -af
-          df -h /
+          sudo systemctl stop docker
+          sudo mkdir -p /mnt/docker
+          echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          df -h / /mnt
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,5 +54,7 @@ jobs:
             SAGEATTENTION_WHEEL_URL=${{ vars.SAGEATTENTION_WHEEL_URL || 'https://huggingface.co/Patarapoom/sageattention-wheels/resolve/main/sageattention-2.2.0+cu130.torch2.13.0-cp312-cp312-linux_x86_64.whl' }}
           secrets: |
             github_token=${{ secrets.ONYX_GITHUB_TOKEN }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Registry cache: the GHA cache's 10 GB limit is smaller than this
+          # image's layers. PR builds read it but never write it.
+          cache-from: type=registry,ref=promptalchemist/comfyui-runpod-jnkprod:buildcache
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=promptalchemist/comfyui-runpod-jnkprod:buildcache,mode=max' || '' }}
