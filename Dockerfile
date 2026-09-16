@@ -53,10 +53,15 @@ RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager \
     && git clone --depth 1 https://github.com/BigStationW/ComfyUi-TextEncodeEditAdvanced \
     && git clone --depth 1 https://github.com/Fannovel16/comfyui_controlnet_aux
 
-# 5. Private custom node. The token is read from a BuildKit secret for this
-#    single command and never written to a layer or to .git/config.
+# 5. Private custom node. The token is read from a BuildKit secret, turned
+#    into a basic `x-access-token` auth header (GitHub's git-over-HTTPS
+#    endpoint rejects a bearer header for personal access tokens) for this
+#    single command, and never written to a layer, ENV, ARG, or .git/config.
 RUN --mount=type=secret,id=github_token \
-    git -c http.extraheader="AUTHORIZATION: bearer $(cat /run/secrets/github_token)" \
+    token=$(tr -d ' \r\n' < /run/secrets/github_token); \
+    if [ -z "$token" ]; then echo "github_token secret is empty" >&2; exit 1; fi; \
+    auth=$(printf 'x-access-token:%s' "$token" | base64 -w0); \
+    GIT_TERMINAL_PROMPT=0 git -c http.extraheader="AUTHORIZATION: basic $auth" \
         clone --depth 1 https://github.com/onyxaipro/Onyx_Custom_Nodes \
     && rm -rf Onyx_Custom_Nodes/.git
 

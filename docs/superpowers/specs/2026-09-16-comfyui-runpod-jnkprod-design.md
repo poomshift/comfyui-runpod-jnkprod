@@ -85,7 +85,7 @@ Single stage. In order:
    - `Fannovel16/comfyui_controlnet_aux`
    - `onyxaipro/Onyx_Custom_Nodes` — private. Cloned with
      `RUN --mount=type=secret,id=github_token` using
-     `git -c http.extraheader="AUTHORIZATION: bearer $(cat /run/secrets/github_token)"`,
+     `git -c http.extraheader="AUTHORIZATION: basic <base64 of x-access-token:$token>"`,
      so the token never lands in a layer or in `.git/config`.
    Then one `uv pip install -c constraints.txt -r` per `requirements.txt`
    found under `custom_nodes/`, plus any `install.py` a node ships. A failing
