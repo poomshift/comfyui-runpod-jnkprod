@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build a SageAttention 2.2.0 wheel for CUDA 13.0 + PyTorch 2.13.0 + Python 3.12
-# on a RunPod pod started from nvidia/cuda:13.0.3-devel-ubuntu24.04.
+# on a RunPod pod started from runpod/pytorch:1.3.1-cu1300-torch2130-ubuntu2404
+# (or any Ubuntu 24.04 image; the CUDA toolkit is installed if nvcc is missing).
 #
 # Usage on the pod:
 #   bash build-sageattention.sh
@@ -32,6 +33,19 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
     python3.12 python3.12-venv python3.12-dev git build-essential ninja-build ca-certificates >/dev/null
+
+export CUDA_HOME=/usr/local/cuda
+export PATH="$CUDA_HOME/bin:$PATH"
+if ! command -v nvcc >/dev/null 2>&1; then
+    log "nvcc not found, installing CUDA toolkit 13.0 (a few minutes)"
+    if ! ls /etc/apt/sources.list.d/ 2>/dev/null | grep -qi cuda; then
+        curl -fsSL -o /tmp/cuda-keyring.deb \
+            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+        dpkg -i /tmp/cuda-keyring.deb
+        apt-get update -qq
+    fi
+    apt-get install -y -qq --no-install-recommends cuda-toolkit-13-0 >/dev/null
+fi
 
 log "nvcc / GPU"
 nvcc --version | tail -2
@@ -68,7 +82,6 @@ log "Building wheel for arches: ${ARCH_LIST} (this takes 10-30 min)"
 export TORCH_CUDA_ARCH_LIST="$ARCH_LIST"
 export MAX_JOBS="$(nproc)"
 export EXT_PARALLEL=4
-export CUDA_HOME=/usr/local/cuda
 rm -f "$OUT"/sageattention-*.whl
 time pip wheel . --no-build-isolation --no-deps -w "$OUT" 2>&1 | grep -vE 'ptxas info|bytes stack frame|bytes spill|Compiling entry function|Function properties|Used [0-9]+ registers' | tail -40
 
