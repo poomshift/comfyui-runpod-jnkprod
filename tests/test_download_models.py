@@ -55,6 +55,29 @@ def test_plan_downloads_skips_existing_unless_forced(tmp_path):
     assert [j.filename for j in forced] == ["have.safetensors", "need.safetensors", "vae.safetensors"]
 
 
+def test_plan_downloads_resumes_a_partial_aria2c_download(tmp_path, caplog):
+    loras = tmp_path / "loras"
+    loras.mkdir()
+    (loras / "x.safetensors").write_bytes(b"partial")
+    control = loras / "x.safetensors.aria2"
+    control.write_bytes(b"ctl")
+    cfg = {"loras": ["https://h/x.safetensors"]}
+
+    caplog.set_level(logging.INFO, logger="download_models")
+    dm.logger.addHandler(caplog.handler)
+    try:
+        jobs = dm.plan_downloads(cfg, tmp_path)
+    finally:
+        dm.logger.removeHandler(caplog.handler)
+    assert [(j.category, j.url, j.filename, j.dest_dir) for j in jobs] == [
+        ("loras", "https://h/x.safetensors", "x.safetensors", loras)
+    ]
+    assert "Resuming partial download of x.safetensors" in caplog.text
+
+    control.unlink()
+    assert dm.plan_downloads(cfg, tmp_path) == []
+
+
 def test_aria2c_command_adds_only_the_matching_auth_header(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_1")
     monkeypatch.setenv("CIVITAI_TOKEN", "civ_1")
@@ -93,6 +116,23 @@ def test_download_job_prefers_hf_client_then_falls_back(monkeypatch, tmp_path):
     ok = asyncio.run(dm.download_job(job, asyncio.Semaphore(1)))
     assert ok is True
     assert seen == ["hf", "aria2c"]
+
+
+def test_download_job_hf_success_drops_a_stale_aria2c_control_file(monkeypatch, tmp_path):
+    # Otherwise the partial left by an earlier aria2c attempt would make every
+    # later boot re-plan (and re-download) a file the HF client already finished.
+    job = dm.Job("vae", "https://huggingface.co/a/b/resolve/main/v.safetensors", "v.safetensors", tmp_path)
+    monkeypatch.setenv("USE_HF_XET", "true")
+    (tmp_path / "v.safetensors.aria2").write_bytes(b"ctl")
+
+    def fake_hf(url, output_dir, filename, staging_root):
+        (Path(output_dir) / filename).write_bytes(b"model")
+        return str(Path(output_dir) / filename)
+
+    monkeypatch.setattr(dm, "download_via_hf", fake_hf)
+    assert asyncio.run(dm.download_job(job, asyncio.Semaphore(1))) is True
+    assert not (tmp_path / "v.safetensors.aria2").exists()
+    assert dm.plan_downloads({tmp_path.name: [job.url]}, tmp_path.parent) == []
 
 
 def test_download_job_uses_aria2c_directly_for_non_hf(monkeypatch, tmp_path):

@@ -83,6 +83,10 @@ def load_config(path_or_url):
     return config
 
 
+def _aria2_control_file(dest_dir, filename):
+    return Path(dest_dir) / (filename + ".aria2")
+
+
 def plan_downloads(config, models_dir, force=False):
     """Turn the config into Jobs, creating category dirs and skipping present files."""
     models_dir = Path(models_dir)
@@ -103,9 +107,13 @@ def plan_downloads(config, models_dir, force=False):
                 logger.error("Skipping bad entry in '%s': %s", category, redact_token(str(e)))
                 continue
 
-            if (dest_dir / filename).exists() and not force:
-                logger.info("Skipping %s, already present in %s", filename, category)
-                continue
+            if not force and (dest_dir / filename).exists():
+                # aria2c keeps <file>.aria2 next to a download until it is
+                # complete, so a file with one is a partial that -c resumes.
+                if not _aria2_control_file(dest_dir, filename).exists():
+                    logger.info("Skipping %s, already present in %s", filename, category)
+                    continue
+                logger.info("Resuming partial download of %s", filename)
 
             jobs.append(Job(category, url, filename, dest_dir))
 
@@ -168,6 +176,15 @@ async def download_job(job, semaphore):
                     download_via_hf, job.url, str(job.dest_dir), job.filename, "/workspace/.hf_staging"
                 )
                 logger.info("Downloaded %s via the Hugging Face client", job.filename)
+                # A control file left by an earlier, interrupted aria2c attempt
+                # would make every later boot treat this file as partial.
+                control = _aria2_control_file(job.dest_dir, job.filename)
+                try:
+                    control.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    logger.warning("Could not remove %s: %s", control, redact_token(str(e)))
                 return True
             except Exception as e:
                 logger.warning("Hugging Face client failed for %s: %s; falling back to aria2c",
