@@ -1,0 +1,17 @@
+{
+  "diffusion_models": [
+    "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/resolve/main/flux-2-klein-9b.safetensors"
+  ],
+  "text_encoders": [
+    "https://huggingface.co/kiwidebringue/QwenTextencoder/resolve/main/qwen3vl_8b_fp8_scaled.safetensors"
+  ],
+  "vae": [
+    "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors"
+  ],
+  "loras": [
+    "https://huggingface.co/kiwidebringue/kleini2i/resolve/main/Klein_realistic_I2I.safetensors",
+    {"url": "https://civitai.com/api/download/models/2760799?fileId=2647078", "filename": "HighResolution9B.safetensors"},
+    {"url": "https://civitai.com/api/download/models/2777498?fileId=2663630", "filename": "Samsung_fluxklein9b.safetensors"},
+    {"url": "https://civitai.com/api/download/models/2863285?fileId=2747224", "filename": "f2k_9B_lcs_consist_20260415.safetensors"}
+  ]
+}
