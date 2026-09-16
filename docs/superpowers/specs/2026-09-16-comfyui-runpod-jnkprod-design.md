@@ -31,7 +31,7 @@ from that project (port 8189, FastAPI log viewer, downloader UI, `static/`,
 | triton | 3.7.1 | pulled in by torch 2.13.0 (`triton==3.7.1` on Linux). Matches the customer's `triton_windows 3.7.1.post27` |
 | ComfyUI | tag `v0.34.2` | `git clone --branch v0.34.2` into `/opt/ComfyUI` |
 | comfy-kitchen / comfy-aimdo | 0.2.31 / 0.4.15 | pinned by ComfyUI v0.34.2 `requirements.txt` |
-| SageAttention | `2.2.0+cu130.torch2.13.0` | prebuilt wheel produced by `scripts/build-sageattention.sh` on a RunPod pod, hosted on Hugging Face. Passed to the build as `SAGEATTENTION_WHEEL_URL` |
+| SageAttention | `2.2.0+cu130.torch2.13.0` | prebuilt wheel produced by `scripts/build-sageattention.sh` on a RunPod pod (2026-09-17, arches 8.0/8.6/8.9/9.0/12.0, verified against SDPA on the GPU). Hosted at `https://huggingface.co/Patarapoom/sageattention-wheels/resolve/main/sageattention-2.2.0+cu130.torch2.13.0-cp312-cp312-linux_x86_64.whl`, which is the default of build arg `SAGEATTENTION_WHEEL_URL` |
 | huggingface_hub | latest 1.x with `[hf_xet]` | PyPI |
 | JupyterLab | latest 4.x | PyPI |
 
@@ -255,8 +255,10 @@ GitHub repository: `poomshift/comfyui-runpod-jnkprod`.
   asked for it.
 - **mediapipe** (comfyui_controlnet_aux) latest 1.0.x has no cp312 Linux wheel;
   pip will resolve an older 0.10.x. Only affects a few preprocessors.
-- **SageAttention wheel**: must be built and uploaded before the first CI
-  build. Until then CI fails at step 5 by design.
+- **SageAttention wheel**: built and uploaded (see version table). Upstream
+  v2.2.0 `setup.py` compiles the Hopper-only sm90 extension for every arch;
+  the build script patches it to sm_90a only. Rebuild needed only if torch
+  changes minor version.
 
 ## Customer-facing README outline
 
