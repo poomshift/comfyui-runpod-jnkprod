@@ -17,8 +17,8 @@ from that project (port 8189, FastAPI log viewer, downloader UI, `static/`,
 
 - No web dashboard, no port 8189.
 - ComfyUI itself is not copied to the volume. Nodes installed at runtime via
-  ComfyUI-Manager do not survive a pod rebuild. (ComfyUI-Manager is not
-  installed; the customer did not ask for it.)
+  ComfyUI-Manager land in the image layer and do not survive a pod rebuild;
+  the README says so.
 - No SageAttention 3, no CUDA 12 variant, no Python other than 3.12.
 
 ## Pinned versions
@@ -72,6 +72,10 @@ Single stage. In order:
    and `uv pip install -c constraints.txt -r /opt/ComfyUI/requirements.txt`.
 5. `uv pip install $SAGEATTENTION_WHEEL_URL` (build arg, required).
 6. Custom nodes into `/opt/ComfyUI/custom_nodes`, each `git clone --depth 1`:
+   - `Comfy-Org/ComfyUI-Manager` (requested by the template owner, not on the
+     customer's list). Its `config.ini` is pre-seeded under
+     `/workspace/user/default/ComfyUI-Manager/` by `start.sh` on first boot
+     with `use_uv = True`, as the reference project does.
    - `rgthree/rgthree-comfy`
    - `PGCRT/CRT-Nodes`
    - `Elevenheights/ComfyUI-FameGridColorFinish`
@@ -85,6 +89,13 @@ Single stage. In order:
    found under `custom_nodes/`, plus any `install.py` a node ships. A failing
    node install fails the build (no `|| true`) so a broken node is noticed at
    build time, not on the customer's pod.
+
+   The nodes disagree on OpenCV: Onyx wants `opencv-python-headless`,
+   controlnet_aux `opencv-python`, CRT-Nodes `opencv-contrib-python`. All
+   three unpack into the same `cv2` directory and pip does not de-duplicate
+   them. After the node requirements are installed, the Dockerfile
+   uninstalls every `opencv-*` distribution and installs
+   `opencv-contrib-python-headless` alone, which is a superset of the three.
 7. `uv pip install -c constraints.txt jupyterlab "huggingface_hub[hf_xet]" aiohttp`.
 8. Copy `start.sh`, `download_models.py`, `utils/`, `models_config.json`,
    `extra_model_paths.yaml`. Copy `extra_model_paths.yaml` into `/opt/ComfyUI/`
