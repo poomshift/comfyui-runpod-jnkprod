@@ -23,6 +23,7 @@ def test_constraints_pin_torch_stack():
         "torchvision==0.28.0+cu130",
         "torchaudio==2.11.0+cu130",
         "triton==3.7.1",
+        "numpy>=2,<3",
     ):
         assert line in text.splitlines(), line
 
