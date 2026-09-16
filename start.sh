@@ -76,8 +76,11 @@ resolve_models_config() {
         rm -f "$target.tmp"
         log "WARNING: could not fetch a valid config from MODELS_CONFIG_URL, using the built-in list"
     fi
-    cp "$APP_DIR/models_config.json" "$target"
-    log "Wrote default models config to $target"
+    if cp "$APP_DIR/models_config.json" "$target"; then
+        log "Wrote default models config to $target"
+    else
+        log "ERROR: could not write $target"
+    fi
 }
 
 # ComfyUI-Manager reads its config from the user directory. Pre-seed it once so

@@ -94,6 +94,17 @@ def test_resolve_models_config_falls_back_when_url_fails(tmp_path):
     assert target.read_text() == (ROOT / "models_config.json").read_text()
 
 
+def test_resolve_models_config_logs_an_error_when_the_copy_fails(tmp_path):
+    r = run_fn(tmp_path, "ensure_dirs; resolve_models_config",
+               env={"APP_DIR": str(tmp_path / "missing-app")})
+    assert r.returncode == 0, r.stderr
+    target = tmp_path / "workspace" / "models_config.json"
+    assert not target.exists()
+    log = (tmp_path / "workspace" / "logs" / "comfyui.log").read_text()
+    assert f"ERROR: could not write {target}" in log
+    assert "Wrote default models config" not in log
+
+
 def test_seed_manager_config_only_when_missing(tmp_path):
     r = run_fn(tmp_path, "ensure_dirs; seed_manager_config")
     assert r.returncode == 0, r.stderr
