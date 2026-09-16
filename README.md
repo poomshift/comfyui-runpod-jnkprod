@@ -19,9 +19,19 @@ and reused on every later start.
 | Port | Service |
 | --- | --- |
 | 8188 | ComfyUI |
-| 8888 | JupyterLab (no password) |
+| 8888 | JupyterLab (no token unless `JUPYTER_TOKEN` is set) |
 
-Open them from the pod's **Connect** menu.
+Open them from the pod's **Connect** menu. Read [Security](#security) before
+sharing a pod.
+
+## Pod setup
+
+- **Volume:** provision at least 60 GB at `/workspace`. The models take about
+  30 GB; the rest is room for outputs and for downloads in progress.
+- **Image tag:** every build is pushed as `:latest` and as a dated
+  `:YYYYMMDD` tag, for example
+  `promptalchemist/comfyui-runpod-jnkprod:20260917`. Pin the RunPod template
+  to a dated tag so a new build never changes a working setup under you.
 
 ## Environment variables
 
@@ -33,9 +43,13 @@ Set these on the RunPod template or pod before the first start.
 | `CIVITAI_TOKEN` | **Yes** for the Consistence Edit LoRA | Civitai API key from https://civitai.com/user/account (the other two Civitai LoRAs download without it) |
 | `MODELS_CONFIG_URL` | No | URL of your own `models_config.json`; used on the first start only |
 | `SKIP_MODEL_DOWNLOAD` | No | `true` skips the download step |
-| `USE_SAGE_ATTENTION` | No | `false` starts ComfyUI without `--use-sage-attention` |
+| `USE_SAGE_ATTENTION` | No | Default `true`. `false`, `0`, `no` or `off` (any letter case) start ComfyUI without `--use-sage-attention` |
 | `COMFYUI_EXTRA_ARGS` | No | Extra ComfyUI flags, for example `--fast` |
 | `COMFYUI_RESTART_DELAY` | No | Seconds to wait before restarting ComfyUI after a crash. Default `10` |
+| `JUPYTER_TOKEN` | No | Token JupyterLab asks for when you open it. Empty (the default) means no authentication |
+| `MAX_CONCURRENT_DOWNLOADS` | No | Files downloaded at the same time. Default `5` |
+| `USE_HF_XET` | No | Default `true`. `false` downloads Hugging Face files with aria2c instead of the official client |
+| `DOWNLOAD_HEARTBEAT_SECONDS` | No | How often the log lists the files still downloading. Default `60` |
 
 Tokens are only sent to their own site and never written to the logs.
 
@@ -44,7 +58,9 @@ Tokens are only sent to their own site and never written to the logs.
 1. JupyterLab is up within seconds on port 8888.
 2. The missing models are downloaded to `/workspace/models` (about 30 GB in
    total). Watch progress in a JupyterLab terminal:
-   `tail -f /workspace/logs/comfyui.log`
+   `tail -f /workspace/logs/comfyui.log`. aria2c progress lines appear as
+   they happen, and a `Still downloading` line lists the files in flight
+   every `DOWNLOAD_HEARTBEAT_SECONDS` (default 60).
 3. ComfyUI starts on port 8188 once the downloads have finished. Its startup
    command line is written to `/workspace/logs/comfyui.log`, so you can check
    there to confirm `--use-sage-attention` is active. If ComfyUI crashes, it
@@ -52,7 +68,8 @@ Tokens are only sent to their own site and never written to the logs.
    (default 10).
 
 Later starts skip files that are already on the volume, so ComfyUI is up in
-under a minute.
+under a minute. If the pod stops mid-download, interrupted downloads resume
+automatically on the next start.
 
 ## What is on the volume
 
@@ -67,6 +84,9 @@ under a minute.
 
 ComfyUI itself and the custom nodes live in the image, not on the volume.
 Nodes installed through ComfyUI-Manager work until the pod is recreated.
+Python packages installed inside the pod (by pip, uv or ComfyUI-Manager) are
+constrained to the image's torch/numpy versions, so a node that needs other
+versions fails to install instead of breaking ComfyUI.
 
 ## Included models
 
@@ -97,6 +117,20 @@ an object with `url` and `filename` when the URL does not end in a filename:
 
 Hugging Face URLs are downloaded with the official client (Xet); everything
 else with aria2c.
+
+`MODELS_CONFIG_URL` and the built-in list are only read when
+`/workspace/models_config.json` does not exist yet. To pick up a changed URL
+or a newer built-in list, delete `/workspace/models_config.json` and restart
+the pod: it is re-fetched from `MODELS_CONFIG_URL`, or re-copied from the
+image when that is unset or cannot be fetched.
+
+## Security
+
+Ports 8188 and 8888 have no authentication unless you set JUPYTER_TOKEN.
+Anyone with your pod URL can use ComfyUI and open a root terminal in
+JupyterLab, which can read HF_TOKEN and CIVITAI_TOKEN. Do not share the URL.
+
+`JUPYTER_TOKEN` protects JupyterLab only; ComfyUI itself has no login.
 
 ## Custom nodes
 

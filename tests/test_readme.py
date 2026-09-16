@@ -14,5 +14,7 @@ def test_readme_documents_ports_env_and_layout():
         "black-forest-labs/FLUX.2-klein-9B",
         "promptalchemist/comfyui-runpod-jnkprod",
         "ComfyUI-Manager", "--use-sage-attention",
+        "JUPYTER_TOKEN", "60 GB", "Security",
+        "MAX_CONCURRENT_DOWNLOADS", "USE_HF_XET", "DOWNLOAD_HEARTBEAT_SECONDS",
     ):
         assert needle in text, needle
