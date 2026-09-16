@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 START = ROOT / "start.sh"
@@ -91,3 +92,68 @@ def test_comfy_args_default_and_disabled_sage(tmp_path):
     args = r.stdout.split()
     assert "--use-sage-attention" not in args
     assert args[-2:] == ["--fast", "--lowvram"]
+
+
+def test_resolve_models_config_fetches_valid_url(tmp_path):
+    remote = tmp_path / "remote.json"
+    remote.write_text('{"loras": ["https://example.invalid/a.safetensors"]}')
+    r = run_fn(tmp_path, "ensure_dirs; resolve_models_config",
+               env={"MODELS_CONFIG_URL": remote.as_uri()})
+    assert r.returncode == 0, r.stderr
+    target = tmp_path / "workspace" / "models_config.json"
+    assert target.read_text() == remote.read_text()
+    assert target.read_text() != (ROOT / "models_config.json").read_text()
+
+
+def test_resolve_models_config_rejects_invalid_json_url(tmp_path):
+    remote = tmp_path / "remote.html"
+    remote.write_text("<html>not json</html>")
+    r = run_fn(tmp_path, "ensure_dirs; resolve_models_config",
+               env={"MODELS_CONFIG_URL": remote.as_uri()})
+    assert r.returncode == 0, r.stderr
+    target = tmp_path / "workspace" / "models_config.json"
+    assert target.read_text() == (ROOT / "models_config.json").read_text()
+    assert not (tmp_path / "workspace" / "models_config.json.tmp").exists()
+
+
+def test_model_folders_match_extra_model_paths(tmp_path):
+    r = run_fn(tmp_path, 'printf "%s\\n" "${MODEL_FOLDERS[@]}"')
+    assert r.returncode == 0, r.stderr
+    printed = set(r.stdout.split())
+    cfg = yaml.safe_load((ROOT / "extra_model_paths.yaml").read_text())
+    section = cfg["runpod"]
+    expected = {k for k in section if k not in ("base_path", "is_default")}
+    assert printed == expected
+
+
+def test_supervise_comfyui_restarts_after_crash(tmp_path):
+    app = tmp_path / "app"
+    app.mkdir(exist_ok=True)
+    shutil.copy(ROOT / "models_config.json", app / "models_config.json")
+    comfy = tmp_path / "comfy"
+    comfy.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    record = tmp_path / "invocations.txt"
+    stub = bindir / "python"
+    stub.write_text('#!/bin/sh\necho "$*" >> "$RECORD"\nexit 3\n')
+    stub.chmod(0o755)
+    env = {
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "WORKSPACE": str(tmp_path / "workspace"),
+        "APP_DIR": str(app),
+        "COMFY_DIR": str(comfy),
+        "COMFYUI_RESTART_DELAY": "0.2",
+        "RECORD": str(record),
+    }
+    with pytest.raises(subprocess.TimeoutExpired):
+        subprocess.run(
+            ["bash", "-c", f"source '{START}'; ensure_dirs; supervise_comfyui"],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2,
+        )
+    calls = [c for c in record.read_text().splitlines()
+             if c.startswith("main.py --listen 0.0.0.0 --port 8188")]
+    assert len(calls) >= 2, record.read_text()
+    log = (tmp_path / "workspace" / "logs" / "comfyui.log").read_text()
+    crashes = [ln for ln in log.splitlines() if "ComfyUI exited with status 3" in ln]
+    assert len(crashes) >= 2, log

@@ -17,6 +17,7 @@ export MODELS_CONFIG_URL="${MODELS_CONFIG_URL:-}"
 export SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-false}"
 export USE_SAGE_ATTENTION="${USE_SAGE_ATTENTION:-true}"
 export COMFYUI_EXTRA_ARGS="${COMFYUI_EXTRA_ARGS:-}"
+export COMFYUI_RESTART_DELAY="${COMFYUI_RESTART_DELAY:-10}"
 export LOG_PATH="${LOG_PATH:-$WORKSPACE/logs/comfyui.log}"
 
 # Hugging Face client. HF_HOME lives on the volume so the Xet chunk cache
@@ -130,16 +131,31 @@ comfy_args() {
     printf '%s\n' "${args[@]}"
 }
 
-start_comfyui() {
+# Runs ComfyUI in the foreground of whatever calls it and restarts it whenever
+# it dies, so a crash cannot leave the pod running with port 8188 dead.
+# PIPESTATUS[0] is ComfyUI's own status; the pipeline's status is tee's.
+supervise_comfyui() {
     local args=()
     while IFS= read -r line; do args+=("$line"); done < <(comfy_args)
-    cd "$COMFY_DIR" || exit 1
-    log "==================== ComfyUI starting $(date -u +%FT%TZ) ===================="
-    log "python main.py ${args[*]}"
-    python main.py "${args[@]}" 2>&1 | tee -a "$LOG_PATH" &
+    cd "$COMFY_DIR" || { log "ERROR: $COMFY_DIR missing"; return 1; }
+    while true; do
+        log "==================== ComfyUI starting $(date -u +%FT%TZ) ===================="
+        log "python main.py ${args[*]}"
+        python main.py "${args[@]}" 2>&1 | tee -a "$LOG_PATH"
+        local status=${PIPESTATUS[0]}
+        log "ComfyUI exited with status $status, restarting in ${COMFYUI_RESTART_DELAY}s"
+        sleep "$COMFYUI_RESTART_DELAY"
+    done
+}
+
+start_comfyui() {
+    supervise_comfyui &
 }
 
 main() {
+    # PID 1 ignores signals it has no handler for, so forward a pod stop to
+    # ComfyUI and JupyterLab instead of dropping it.
+    trap 'log "Stopping"; kill -TERM 0 2>/dev/null; exit 143' TERM INT
     ensure_dirs
     log "ComfyUI RunPod template starting (workspace: $WORKSPACE)"
     nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | while read -r gpu; do log "GPU: $gpu"; done
