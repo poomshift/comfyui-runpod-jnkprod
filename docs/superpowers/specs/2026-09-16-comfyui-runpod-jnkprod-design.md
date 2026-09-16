@@ -4,7 +4,7 @@ Date: 2026-09-16
 
 ## Goal
 
-A RunPod template (Docker image) that boots straight into ComfyUI 0.34.2 on port
+A RunPod template (Docker image) that boots straight into ComfyUI 0.36.0 on port
 8188 and JupyterLab on port 8888, with the customer's custom nodes baked into
 the image and the customer's FLUX.2 Klein 9B model set downloaded onto the
 persistent volume on first start via Hugging Face Xet.
@@ -29,11 +29,15 @@ from that project (port 8189, FastAPI log viewer, downloader UI, `static/`,
 | Python | 3.12 | apt `python3.12`, venv at `/opt/venv` |
 | PyTorch | `torch==2.13.0+cu130`, `torchvision==0.28.0+cu130`, `torchaudio==2.11.0+cu130` | `https://download.pytorch.org/whl/cu130`. torchaudio has no 2.13 release; 2.11.0 is the last one and declares no torch pin |
 | triton | 3.7.1 | pulled in by torch 2.13.0 (`triton==3.7.1` on Linux). Matches the customer's `triton_windows 3.7.1.post27` |
-| ComfyUI | tag `v0.34.2` | `git clone --branch v0.34.2` into `/opt/ComfyUI` |
-| comfy-kitchen / comfy-aimdo | 0.2.31 / 0.4.15 | pinned by ComfyUI v0.34.2 `requirements.txt` |
+| ComfyUI | tag `v0.36.0` | `git clone --branch v0.36.0` into `/opt/ComfyUI` |
+| comfy-kitchen / comfy-aimdo | 0.2.34 / 0.5.3 | pinned by ComfyUI v0.36.0 `requirements.txt` |
 | SageAttention | `2.2.0+cu130.torch2.13.0` | prebuilt wheel produced by `scripts/build-sageattention.sh` on a RunPod pod (2026-09-17, arches 8.0/8.6/8.9/9.0/12.0, verified against SDPA on the GPU). Hosted at `https://huggingface.co/Patarapoom/sageattention-wheels/resolve/main/sageattention-2.2.0+cu130.torch2.13.0-cp312-cp312-linux_x86_64.whl`, which is the default of build arg `SAGEATTENTION_WHEEL_URL` |
 | huggingface_hub | latest 1.x with `[hf_xet]` | PyPI |
 | JupyterLab | latest 4.x | PyPI |
+
+The customer's list gives minimum versions. ComfyUI moved from v0.34.2 to
+v0.36.0 because CRT-Nodes 2.19.0 imports `comfy.ldm.minimax.controlnet`, which
+first appears in v0.35.0.
 
 A `constraints.txt` pins torch, torchvision, torchaudio, triton and numpy and is
 passed as `-c` to every `pip install` in the Dockerfile, so no custom node
@@ -68,14 +72,14 @@ Single stage. In order:
    into the venv and use `uv pip install` for speed.
 3. `uv pip install -c constraints.txt torch torchvision torchaudio
    --index-url https://download.pytorch.org/whl/cu130`.
-4. `git clone --depth 1 --branch v0.34.2 https://github.com/comfyanonymous/ComfyUI /opt/ComfyUI`
+4. `git clone --depth 1 --branch v0.36.0 https://github.com/comfyanonymous/ComfyUI /opt/ComfyUI`
    and `uv pip install -c constraints.txt -r /opt/ComfyUI/requirements.txt`.
 5. `uv pip install $SAGEATTENTION_WHEEL_URL` (build arg, required).
 6. Custom nodes into `/opt/ComfyUI/custom_nodes`, each `git clone --depth 1`:
    - `Comfy-Org/ComfyUI-Manager` (requested by the template owner, not on the
      customer's list). Its `config.ini` is pre-seeded at
      `/workspace/user/__manager/config.ini` by `start.sh` on first boot with
-     `use_uv = True` and `security_level = normal`. (ComfyUI v0.34.2 has
+     `use_uv = True` and `security_level = normal`. (ComfyUI v0.36.0 has
      `folder_paths.get_system_user_directory`, so current Manager reads
      `user/__manager`, not the legacy `user/default/ComfyUI-Manager`.)
    - `rgthree/rgthree-comfy`
@@ -128,7 +132,7 @@ SageAttention versions.
 | `/workspace/.cache/huggingface` | volume | `HF_HOME`, holds the Xet chunk cache |
 | `/workspace/models_config.json` | volume | the effective model list (see below) |
 
-`extra_model_paths.yaml` lists the 26 model folder names ComfyUI v0.34.2
+`extra_model_paths.yaml` lists the 26 model folder names ComfyUI v0.36.0
 registers in `folder_paths.py` (legacy `clip`/`unet` are aliases of
 `text_encoders`/`diffusion_models`; `ipadapter` belongs to a node that is not
 installed) under `base_path: /workspace/models`. `start.sh` creates all of

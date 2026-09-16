@@ -5,7 +5,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Every folder name ComfyUI v0.34.2 knows, minus custom_nodes (stays in the image)
+# Every folder name ComfyUI v0.36.0 knows, minus custom_nodes (stays in the image)
 COMFY_MODEL_FOLDERS = {
     "audio_encoders", "background_removal", "checkpoints", "classifiers",
     "clip_vision", "configs", "controlnet", "datasets", "detection",

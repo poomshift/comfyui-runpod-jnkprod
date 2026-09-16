@@ -108,7 +108,7 @@ def test_resolve_models_config_logs_an_error_when_the_copy_fails(tmp_path):
 def test_seed_manager_config_only_when_missing(tmp_path):
     r = run_fn(tmp_path, "ensure_dirs; seed_manager_config")
     assert r.returncode == 0, r.stderr
-    # ComfyUI v0.34.2 has the System User API, so Manager reads user/__manager.
+    # ComfyUI v0.36.0 has the System User API, so Manager reads user/__manager.
     ini = tmp_path / "workspace" / "user" / "__manager" / "config.ini"
     # A legacy-path file would make Manager re-run its migration on every boot.
     assert not (tmp_path / "workspace" / "user" / "default" / "ComfyUI-Manager").exists()

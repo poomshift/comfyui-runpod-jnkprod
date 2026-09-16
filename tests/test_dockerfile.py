@@ -24,7 +24,7 @@ def test_dockerfile_contract():
     assert "python3.12" in text
     assert "&& git lfs install --system" in text
     assert "--index-url https://download.pytorch.org/whl/cu130" in text
-    assert "ARG COMFYUI_TAG=v0.34.2" in text
+    assert "ARG COMFYUI_TAG=v0.36.0" in text
     assert "--branch ${COMFYUI_TAG}" in text
     assert "ARG SAGEATTENTION_WHEEL_URL=https://huggingface.co/Patarapoom/sageattention-wheels/resolve/main/sageattention-2.2.0+cu130.torch2.13.0-cp312-cp312-linux_x86_64.whl" in text
     assert "--mount=type=secret,id=github_token" in text

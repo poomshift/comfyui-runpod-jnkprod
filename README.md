@@ -8,7 +8,7 @@ and reused on every later start.
 
 | What | Version |
 | --- | --- |
-| ComfyUI | 0.34.2 |
+| ComfyUI | 0.36.0 |
 | PyTorch | 2.13.0+cu130 (CUDA 13.0) |
 | Python | 3.12 |
 | SageAttention | 2.2.0 (on by default) |
