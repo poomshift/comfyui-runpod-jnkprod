@@ -129,6 +129,9 @@ def aria2c_command(url, dest_dir, filename):
         *hf_auth_args(url),
         *civitai_auth_args(url),
         "--console-log-level=warn",
+        # Its output is streamed into the log, so skip the once-a-second
+        # readout and keep only the --summary-interval summaries.
+        "--show-console-readout=false",
         "-c",
         "-x", "4",
         "-s", "4",

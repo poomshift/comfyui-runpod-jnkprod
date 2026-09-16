@@ -97,6 +97,9 @@ def test_aria2c_command_adds_only_the_matching_auth_header(monkeypatch):
     other = dm.aria2c_command("https://example.com/z.bin", dest, "z.bin")
     assert not any(a.startswith("--header=Authorization") for a in other)
     assert "-c" in other and "-x" in other
+    # The per-second readout would flood the log; only the periodic summaries remain.
+    assert "--show-console-readout=false" in other
+    assert "--summary-interval=30" in other
 
 
 def test_download_job_prefers_hf_client_then_falls_back(monkeypatch, tmp_path):
