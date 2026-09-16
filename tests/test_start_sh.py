@@ -121,6 +121,21 @@ def test_comfy_args_default_and_disabled_sage(tmp_path):
     assert args[-2:] == ["--fast", "--lowvram"]
 
 
+@pytest.mark.parametrize("value", [None, "", "true", "True", "TRUE", "1", "yes"])
+def test_comfy_args_sage_attention_is_on_unless_disabled(tmp_path, value):
+    env = {} if value is None else {"USE_SAGE_ATTENTION": value}
+    r = run_fn(tmp_path, "comfy_args", env=env)
+    assert r.returncode == 0, r.stderr
+    assert "--use-sage-attention" in r.stdout.split()
+
+
+@pytest.mark.parametrize("value", ["false", "FALSE", "False", "0", "no", "No", "off", "OFF"])
+def test_comfy_args_sage_attention_disabled_case_insensitively(tmp_path, value):
+    r = run_fn(tmp_path, "comfy_args", env={"USE_SAGE_ATTENTION": value})
+    assert r.returncode == 0, r.stderr
+    assert "--use-sage-attention" not in r.stdout.split()
+
+
 def test_resolve_models_config_fetches_valid_url(tmp_path):
     remote = tmp_path / "remote.json"
     remote.write_text('{"loras": ["https://example.invalid/a.safetensors"]}')

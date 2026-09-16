@@ -130,9 +130,13 @@ comfy_args() {
         --output-directory "$WORKSPACE/output"
         --input-directory "$WORKSPACE/input"
         --user-directory "$WORKSPACE/user")
-    if [ "$USE_SAGE_ATTENTION" = "true" ]; then
-        args+=(--use-sage-attention)
-    fi
+    # On unless explicitly disabled, in any letter case.
+    local sage
+    sage=$(printf '%s' "$USE_SAGE_ATTENTION" | tr '[:upper:]' '[:lower:]')
+    case "$sage" in
+        false | 0 | no | off) ;;
+        *) args+=(--use-sage-attention) ;;
+    esac
     if [ -n "$COMFYUI_EXTRA_ARGS" ]; then
         # shellcheck disable=SC2206
         args+=($COMFYUI_EXTRA_ARGS)
