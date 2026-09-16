@@ -80,10 +80,24 @@ grep -q "2.2.0+${LOCAL_VERSION}" setup.py
 
 log "Building wheel for arches: ${ARCH_LIST} (this takes 10-30 min)"
 export TORCH_CUDA_ARCH_LIST="$ARCH_LIST"
-export MAX_JOBS="$(nproc)"
-export EXT_PARALLEL=4
+# EXT_PARALLEL extensions build at once, each with MAX_JOBS nvcc processes.
+# Keep the product near the core count so the pod does not run out of RAM.
+export EXT_PARALLEL="${EXT_PARALLEL:-2}"
+export MAX_JOBS="${MAX_JOBS:-$(( $(nproc) / EXT_PARALLEL ))}"
+[ "$MAX_JOBS" -ge 2 ] || MAX_JOBS=2
+echo "nproc=$(nproc) EXT_PARALLEL=$EXT_PARALLEL MAX_JOBS=$MAX_JOBS RAM=$(free -g | awk '/Mem/{print $2}')G"
 rm -f "$OUT"/sageattention-*.whl
-time pip wheel . --no-build-isolation --no-deps -w "$OUT" 2>&1 | grep -vE 'ptxas info|bytes stack frame|bytes spill|Compiling entry function|Function properties|Used [0-9]+ registers' | tail -40
+BUILD_LOG=$WORK/pip-wheel.log
+if ! (time pip wheel . --no-build-isolation --no-deps -v -w "$OUT") >"$BUILD_LOG" 2>&1; then
+    echo
+    echo "BUILD FAILED. Full log: $BUILD_LOG"
+    echo "----- error lines -----"
+    grep -nE 'error|Error|Killed|fatal|No such file' "$BUILD_LOG" | grep -vE 'ptxas|Traceback|-Werror|error_code|_error\.' | head -40
+    echo "----- last 30 lines -----"
+    grep -vE 'ptxas info|bytes stack frame|bytes spill|Compiling entry function|Function properties|Used [0-9]+ registers' "$BUILD_LOG" | tail -30
+    exit 1
+fi
+grep -E '^real' "$BUILD_LOG" || true
 
 WHEEL=$(ls "$OUT"/sageattention-*.whl)
 log "Built: $WHEEL"
