@@ -8,7 +8,7 @@ _TOKEN_ENV_VARS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN")
 _HF_HOSTS = ("huggingface.co", "hf.co")
 
 # Every env var whose value must never reach a log line.
-_ALL_SECRET_ENV_VARS = _TOKEN_ENV_VARS + ("CIVITAI_TOKEN",)
+_ALL_SECRET_ENV_VARS = _TOKEN_ENV_VARS + ("CIVITAI_TOKEN", "JUPYTER_TOKEN")
 
 
 def get_hf_token(explicit_token=None):

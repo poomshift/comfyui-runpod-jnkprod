@@ -59,7 +59,8 @@ def test_civitai_auth_args(monkeypatch):
 def test_redact_token_masks_every_configured_token(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_secret")
     monkeypatch.setenv("CIVITAI_TOKEN", "civ_secret")
-    text = "GET ?token=civ_secret Authorization: Bearer hf_secret done"
-    assert hfAuth.redact_token(text) == "GET ?token=*** Authorization: Bearer *** done"
+    monkeypatch.setenv("JUPYTER_TOKEN", "jup_secret")
+    text = "GET ?token=civ_secret Authorization: Bearer hf_secret lab?token=jup_secret done"
+    assert hfAuth.redact_token(text) == "GET ?token=*** Authorization: Bearer *** lab?token=*** done"
     assert hfAuth.redact_token("") == ""
     assert hfAuth.redact_token(None) is None
