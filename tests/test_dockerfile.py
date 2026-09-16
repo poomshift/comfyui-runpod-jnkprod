@@ -23,6 +23,8 @@ def test_dockerfile_contract():
     assert "--branch ${COMFYUI_TAG}" in text
     assert "ARG SAGEATTENTION_WHEEL_URL=https://huggingface.co/Patarapoom/sageattention-wheels/resolve/main/sageattention-2.2.0+cu130.torch2.13.0-cp312-cp312-linux_x86_64.whl" in text
     assert "--mount=type=secret,id=github_token" in text
+    assert "ENV PIP_CONSTRAINT=/app/constraints.txt UV_CONSTRAINT=/app/constraints.txt" in text
+    assert "assert torch.__version__.startswith('2.13.0+cu130')" in text
     for node in NODES:
         assert node in text, node
     assert "opencv-contrib-python-headless" in text

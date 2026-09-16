@@ -26,6 +26,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip uv
 
 COPY constraints.txt /app/constraints.txt
+# Constrain *every* later install, including plain `pip install` run by a node's
+# install.py. Set after the COPY: pip errors on a missing constraints file, which
+# would break the `pip install --upgrade pip uv` above.
+ENV PIP_CONSTRAINT=/app/constraints.txt UV_CONSTRAINT=/app/constraints.txt
 
 # 1. CUDA 13 torch stack. The constraints file keeps every later install on it.
 RUN uv pip install -c /app/constraints.txt \
@@ -70,23 +74,26 @@ RUN set -e; for req in */requirements.txt; do \
 # 7. Services and downloader dependencies.
 RUN uv pip install -c /app/constraints.txt jupyterlab "huggingface_hub[hf_xet]"
 
-# 8. App files.
-WORKDIR /app
-COPY start.sh download_models.py models_config.json extra_model_paths.yaml ./
-COPY utils/ ./utils/
-RUN chmod +x /app/start.sh \
-    && cp /app/extra_model_paths.yaml /opt/ComfyUI/extra_model_paths.yaml
-
-# 9. Build-time smoke test: the torch stack imports and every custom node loads.
-#    Runs on CPU so it works on a GPU-less CI runner.
+# 8. Build-time smoke test: the torch stack imports, is still the cu130 build a
+#    node installer could have replaced, and every custom node loads. Runs on CPU
+#    so it works on a GPU-less CI runner. Kept above the app COPY so editing
+#    start.sh or download_models.py does not re-run the quick test.
+WORKDIR /opt/ComfyUI
 RUN python -c "import torch, torchvision, torchaudio, triton, sageattention, comfy_kitchen, comfy_aimdo; \
-        print('torch', torch.__version__, 'cuda', torch.version.cuda, 'triton', triton.__version__)" \
-    && cd /opt/ComfyUI \
+        print('torch', torch.__version__, 'cuda', torch.version.cuda, 'triton', triton.__version__); \
+        assert torch.__version__.startswith('2.13.0+cu130'), torch.__version__" \
     && (python main.py --cpu --quick-test-for-ci --user-directory /tmp/ci-user --output-directory /tmp/ci-out \
         > /tmp/quick-test.log 2>&1 || (cat /tmp/quick-test.log; echo "quick test exited non-zero"; exit 1)) \
     && cat /tmp/quick-test.log \
     && ! grep -E "IMPORT FAILED|Cannot import" /tmp/quick-test.log \
     && rm -rf /tmp/ci-user /tmp/ci-out /tmp/quick-test.log
+
+# 9. App files.
+WORKDIR /app
+COPY start.sh download_models.py models_config.json extra_model_paths.yaml ./
+COPY utils/ ./utils/
+RUN chmod +x /app/start.sh \
+    && cp /app/extra_model_paths.yaml /opt/ComfyUI/extra_model_paths.yaml
 
 LABEL org.opencontainers.image.title="comfyui-runpod-jnkprod" \
       org.opencontainers.image.description="ComfyUI ${COMFYUI_TAG}, torch 2.13.0+cu130, SageAttention 2.2.0, Python 3.12" \
