@@ -13,6 +13,8 @@ COMFY_DIR="${COMFY_DIR:-/opt/ComfyUI}"
 
 export HF_TOKEN="${HF_TOKEN:-}"
 export CIVITAI_TOKEN="${CIVITAI_TOKEN:-}"
+# Empty means JupyterLab asks for no token.
+export JUPYTER_TOKEN="${JUPYTER_TOKEN:-}"
 export MODELS_CONFIG_URL="${MODELS_CONFIG_URL:-}"
 export SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-false}"
 export USE_SAGE_ATTENTION="${USE_SAGE_ATTENTION:-true}"
@@ -99,7 +101,7 @@ update_policy = stable-comfyui
 windows_selector_event_loop_policy = False
 model_download_by_agent = False
 downgrade_blacklist =
-security_level = weak
+security_level = normal
 skip_migration_check = True
 always_lazy_install = False
 network_mode = public
@@ -107,12 +109,13 @@ db_mode = cache
 INI
 }
 
+# The token is never logged.
 start_jupyter() {
     log "Starting JupyterLab on port 8888"
     CUDA_VISIBLE_DEVICES="" nohup jupyter lab \
         --allow-root --no-browser --ip=0.0.0.0 --port=8888 \
-        --ServerApp.token='' --ServerApp.password='' \
-        --ServerApp.allow_origin='*' --ServerApp.root_dir="$WORKSPACE" \
+        --ServerApp.token="$JUPYTER_TOKEN" --ServerApp.password='' \
+        --ServerApp.root_dir="$WORKSPACE" \
         >"$WORKSPACE/logs/jupyter.log" 2>&1 &
 }
 

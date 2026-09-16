@@ -99,6 +99,7 @@ def test_seed_manager_config_only_when_missing(tmp_path):
     assert r.returncode == 0, r.stderr
     ini = tmp_path / "workspace" / "user" / "default" / "ComfyUI-Manager" / "config.ini"
     assert "use_uv = True" in ini.read_text()
+    assert "security_level = normal" in ini.read_text().splitlines()
     ini.write_text("[default]\ncustom = yes\n")
     run_fn(tmp_path, "seed_manager_config")
     assert ini.read_text() == "[default]\ncustom = yes\n"
@@ -119,6 +120,32 @@ def test_comfy_args_default_and_disabled_sage(tmp_path):
     args = r.stdout.split()
     assert "--use-sage-attention" not in args
     assert args[-2:] == ["--fast", "--lowvram"]
+
+
+@pytest.mark.parametrize("token", [None, "abc"])
+def test_start_jupyter_arguments(tmp_path, token):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    argv_file = tmp_path / "jupyter-argv.txt"
+    stub = bindir / "jupyter"
+    stub.write_text('#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a"; done > "$ARGV_FILE"\n')
+    stub.chmod(0o755)
+    env = {"PATH": f"{bindir}:{os.environ['PATH']}", "ARGV_FILE": str(argv_file)}
+    if token is not None:
+        env["JUPYTER_TOKEN"] = token
+
+    # `wait` lets the backgrounded jupyter stub finish writing before we read.
+    r = run_fn(tmp_path, "ensure_dirs; start_jupyter; wait", env=env)
+    assert r.returncode == 0, r.stderr
+    argv = argv_file.read_text().splitlines()
+    assert argv[0] == "lab"
+    assert not any("allow_origin" in a for a in argv), argv
+    assert f"--ServerApp.token={token or ''}" in argv
+    assert "--ServerApp.password=" in argv
+    assert f"--ServerApp.root_dir={tmp_path / 'workspace'}" in argv
+    if token:
+        assert token not in (tmp_path / "workspace" / "logs" / "comfyui.log").read_text()
+        assert token not in r.stdout + r.stderr
 
 
 @pytest.mark.parametrize("value", [None, "", "true", "True", "TRUE", "1", "yes"])
