@@ -84,9 +84,12 @@ resolve_models_config() {
 }
 
 # ComfyUI-Manager reads its config from the user directory. Pre-seed it once so
-# it installs node dependencies with uv (fast) instead of pip.
+# it installs node dependencies with uv (fast) instead of pip. ComfyUI v0.34.2
+# has the System User API, so Manager uses user/__manager; a file at the legacy
+# user/default/ComfyUI-Manager path would be migrated away and re-seeded on
+# every boot.
 seed_manager_config() {
-    local dir="$WORKSPACE/user/default/ComfyUI-Manager"
+    local dir="$WORKSPACE/user/__manager"
     local ini="$dir/config.ini"
     [ -f "$ini" ] && return 0
     mkdir -p "$dir"
