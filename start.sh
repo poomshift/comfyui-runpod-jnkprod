@@ -28,6 +28,8 @@ export HF_HOME="${HF_HOME:-$WORKSPACE/.cache/huggingface}"
 export HF_XET_CHUNK_CACHE_SIZE_BYTES="${HF_XET_CHUNK_CACHE_SIZE_BYTES:-8589934592}"
 export HF_XET_HIGH_PERFORMANCE="${HF_XET_HIGH_PERFORMANCE:-1}"
 export HF_HUB_DISABLE_PROGRESS_BARS="${HF_HUB_DISABLE_PROGRESS_BARS:-1}"
+# Per-download temp dirs for the Hugging Face client; read by download_models.py.
+export HF_STAGING_DIR="${HF_STAGING_DIR:-$WORKSPACE/.hf_staging}"
 
 MODEL_FOLDERS=(audio_encoders background_removal checkpoints classifiers clip_vision configs
     controlnet datasets detection diffusers diffusion_models embeddings frame_interpolation
@@ -37,8 +39,15 @@ MODEL_FOLDERS=(audio_encoders background_removal checkpoints classifiers clip_vi
 log() { echo "[start] $*" | tee -a "$LOG_PATH"; }
 
 ensure_dirs() {
+    # Nothing downloads before this runs, so anything left in the staging dir is
+    # an orphan of an interrupted download. The guard keeps a mistyped
+    # HF_STAGING_DIR from wiping the volume.
+    case "$HF_STAGING_DIR" in
+        "" | / | "$WORKSPACE" | "$WORKSPACE"/) ;;
+        *) rm -rf "$HF_STAGING_DIR" ;;
+    esac
     mkdir -p "$WORKSPACE/logs" "$WORKSPACE/output" "$WORKSPACE/input" "$WORKSPACE/user" \
-        "$WORKSPACE/.cache/huggingface" "$WORKSPACE/.hf_staging"
+        "$WORKSPACE/.cache/huggingface" "$HF_STAGING_DIR"
     for f in "${MODEL_FOLDERS[@]}"; do
         mkdir -p "$WORKSPACE/models/$f"
     done

@@ -43,6 +43,33 @@ def test_ensure_dirs_creates_workspace_layout(tmp_path):
         assert (ws / sub).is_dir(), sub
 
 
+def test_ensure_dirs_wipes_orphaned_hf_staging(tmp_path):
+    stale = tmp_path / "workspace" / ".hf_staging" / "old"
+    stale.mkdir(parents=True)
+    (stale / "flux.safetensors.part").write_bytes(b"x" * 16)
+    r = run_fn(tmp_path, "ensure_dirs")
+    assert r.returncode == 0, r.stderr
+    staging = tmp_path / "workspace" / ".hf_staging"
+    assert staging.is_dir()
+    assert list(staging.iterdir()) == []
+
+
+def test_ensure_dirs_honours_hf_staging_dir_but_never_wipes_the_workspace(tmp_path):
+    ws = tmp_path / "workspace"
+    (ws / "models" / "loras").mkdir(parents=True)
+    (ws / "models" / "loras" / "keep.safetensors").write_bytes(b"x")
+    custom = tmp_path / "staging"
+    (custom / "old").mkdir(parents=True)
+    r = run_fn(tmp_path, 'ensure_dirs; echo "$HF_STAGING_DIR"', env={"HF_STAGING_DIR": str(custom)})
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip().splitlines()[-1] == str(custom)
+    assert custom.is_dir() and list(custom.iterdir()) == []
+
+    r = run_fn(tmp_path, "ensure_dirs", env={"HF_STAGING_DIR": str(ws)})
+    assert r.returncode == 0, r.stderr
+    assert (ws / "models" / "loras" / "keep.safetensors").exists()
+
+
 def test_resolve_models_config_copies_baked_default(tmp_path):
     r = run_fn(tmp_path, "ensure_dirs; resolve_models_config")
     assert r.returncode == 0, r.stderr

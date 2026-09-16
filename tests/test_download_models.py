@@ -135,6 +135,21 @@ def test_download_job_hf_success_drops_a_stale_aria2c_control_file(monkeypatch, 
     assert dm.plan_downloads({tmp_path.name: [job.url]}, tmp_path.parent) == []
 
 
+def test_download_job_stages_hf_downloads_in_hf_staging_dir(monkeypatch, tmp_path):
+    job = dm.Job("vae", "https://huggingface.co/a/b/resolve/main/v.safetensors", "v.safetensors", tmp_path)
+    monkeypatch.setenv("USE_HF_XET", "true")
+    monkeypatch.setenv("HF_STAGING_DIR", str(tmp_path / "staging"))
+    seen = []
+
+    def fake_hf(url, output_dir, filename, staging_root):
+        seen.append(staging_root)
+        return str(Path(output_dir) / filename)
+
+    monkeypatch.setattr(dm, "download_via_hf", fake_hf)
+    assert asyncio.run(dm.download_job(job, asyncio.Semaphore(1))) is True
+    assert seen == [str(tmp_path / "staging")]
+
+
 def test_download_job_uses_aria2c_directly_for_non_hf(monkeypatch, tmp_path):
     job = dm.Job("loras", "https://civitai.com/api/download/models/1", "l.safetensors", tmp_path)
     seen = []

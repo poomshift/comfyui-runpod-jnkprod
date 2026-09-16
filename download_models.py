@@ -173,7 +173,7 @@ async def download_job(job, semaphore):
         if hf_client_enabled() and parse_hf_url(job.url):
             try:
                 await asyncio.to_thread(
-                    download_via_hf, job.url, str(job.dest_dir), job.filename, "/workspace/.hf_staging"
+                    download_via_hf, job.url, str(job.dest_dir), job.filename, _hf_staging_dir()
                 )
                 logger.info("Downloaded %s via the Hugging Face client", job.filename)
                 # A control file left by an earlier, interrupted aria2c attempt
@@ -231,6 +231,11 @@ def _configure_logging(log_path):
         else:
             file_handler.setFormatter(fmt)
             logger.addHandler(file_handler)
+
+
+def _hf_staging_dir():
+    """Where the Hugging Face client stages files; start.sh wipes it at boot."""
+    return (os.getenv("HF_STAGING_DIR") or "").strip() or "/workspace/.hf_staging"
 
 
 def _max_concurrent_downloads(default=5):
