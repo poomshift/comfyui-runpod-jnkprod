@@ -90,16 +90,21 @@ cg_mem_gb=$(free -g | awk '/Mem/{print $2}')
 if mem_max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null) && [ "$mem_max" != "max" ]; then
     cg_mem_gb=$(( mem_max / 1024 / 1024 / 1024 ))
 fi
-jobs_by_mem=$(( cg_mem_gb / 3 ))
+# setup.py hardcodes nvcc --threads=8; with 5 arches the fp8 sm89 kernels take
+# several GB per thread. Lower the thread count and budget ~10 GB per job.
+NVCC_THREADS="${NVCC_THREADS:-2}"
+sed -i "s/\"--threads=8\"/\"--threads=${NVCC_THREADS}\"/" setup.py
+grep -q -- "--threads=${NVCC_THREADS}" setup.py
+jobs_by_mem=$(( cg_mem_gb / 10 ))
 export EXT_PARALLEL="${EXT_PARALLEL:-1}"
 if [ -z "${MAX_JOBS:-}" ]; then
     MAX_JOBS=$cg_cpus
     [ "$jobs_by_mem" -lt "$MAX_JOBS" ] && MAX_JOBS=$jobs_by_mem
     MAX_JOBS=$(( MAX_JOBS / EXT_PARALLEL ))
 fi
-[ "$MAX_JOBS" -ge 2 ] || MAX_JOBS=2
+[ "$MAX_JOBS" -ge 1 ] || MAX_JOBS=1
 export MAX_JOBS
-echo "pod limits: cpus=$cg_cpus ram=${cg_mem_gb}G -> EXT_PARALLEL=$EXT_PARALLEL MAX_JOBS=$MAX_JOBS"
+echo "pod limits: cpus=$cg_cpus ram=${cg_mem_gb}G -> EXT_PARALLEL=$EXT_PARALLEL MAX_JOBS=$MAX_JOBS NVCC_THREADS=$NVCC_THREADS"
 rm -f "$OUT"/sageattention-*.whl
 BUILD_LOG=$WORK/pip-wheel.log
 if ! (time pip wheel . --no-build-isolation --no-deps -v -w "$OUT") >"$BUILD_LOG" 2>&1; then
