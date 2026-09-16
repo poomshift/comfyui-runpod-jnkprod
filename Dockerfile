@@ -90,6 +90,7 @@ WORKDIR /opt/ComfyUI
 RUN python -c "import torch, torchvision, torchaudio, triton, sageattention, comfy_kitchen, comfy_aimdo; \
         print('torch', torch.__version__, 'cuda', torch.version.cuda, 'triton', triton.__version__); \
         assert torch.__version__.startswith('2.13.0+cu130'), torch.__version__" \
+    && mkdir -p /tmp/ci-user /tmp/ci-out \
     && (python main.py --cpu --quick-test-for-ci --user-directory /tmp/ci-user --output-directory /tmp/ci-out \
         > /tmp/quick-test.log 2>&1 || (cat /tmp/quick-test.log; echo "quick test exited non-zero"; exit 1)) \
     && cat /tmp/quick-test.log \

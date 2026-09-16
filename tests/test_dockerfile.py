@@ -36,6 +36,7 @@ def test_dockerfile_contract():
         assert node in text, node
     assert "opencv-contrib-python-headless" in text
     assert "--quick-test-for-ci" in text
+    assert "mkdir -p /tmp/ci-user /tmp/ci-out" in text
     assert "EXPOSE 8188 8888" in text
     assert 'CMD ["/app/start.sh"]' in text
     # every pip install in the image is constrained
