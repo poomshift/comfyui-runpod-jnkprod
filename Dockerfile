@@ -23,7 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 libgomp1 ffmpeg aria2 \
     && rm -rf /var/lib/apt/lists/* \
     && python3.12 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip uv
+    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip uv \
+    && git lfs install --system
 
 COPY constraints.txt /app/constraints.txt
 # Constrain *every* later install, including plain `pip install` run by a node's

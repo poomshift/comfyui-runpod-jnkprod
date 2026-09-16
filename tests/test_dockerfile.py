@@ -22,6 +22,7 @@ def test_dockerfile_contract():
     assert text.startswith("# syntax=docker/dockerfile:1")
     assert "FROM nvidia/cuda:13.0.3-base-ubuntu24.04" in text
     assert "python3.12" in text
+    assert "&& git lfs install --system" in text
     assert "--index-url https://download.pytorch.org/whl/cu130" in text
     assert "ARG COMFYUI_TAG=v0.34.2" in text
     assert "--branch ${COMFYUI_TAG}" in text
