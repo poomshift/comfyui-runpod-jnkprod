@@ -82,9 +82,9 @@ Single stage. In order:
      `git -c http.extraheader="AUTHORIZATION: bearer $(cat /run/secrets/github_token)"`,
      so the token never lands in a layer or in `.git/config`.
    Then one `uv pip install -c constraints.txt -r` per `requirements.txt`
-   found under `custom_nodes/`, plus any `install.py` a node ships. Each node
-   install is allowed to fail the build (no `|| true`) so a broken node is
-   noticed at build time, not on the customer's pod.
+   found under `custom_nodes/`, plus any `install.py` a node ships. A failing
+   node install fails the build (no `|| true`) so a broken node is noticed at
+   build time, not on the customer's pod.
 7. `uv pip install -c constraints.txt jupyterlab "huggingface_hub[hf_xet]" aiohttp`.
 8. Copy `start.sh`, `download_models.py`, `utils/`, `models_config.json`,
    `extra_model_paths.yaml`. Copy `extra_model_paths.yaml` into `/opt/ComfyUI/`
