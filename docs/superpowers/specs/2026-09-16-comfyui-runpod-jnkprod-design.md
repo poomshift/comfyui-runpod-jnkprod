@@ -73,9 +73,11 @@ Single stage. In order:
 5. `uv pip install $SAGEATTENTION_WHEEL_URL` (build arg, required).
 6. Custom nodes into `/opt/ComfyUI/custom_nodes`, each `git clone --depth 1`:
    - `Comfy-Org/ComfyUI-Manager` (requested by the template owner, not on the
-     customer's list). Its `config.ini` is pre-seeded under
-     `/workspace/user/default/ComfyUI-Manager/` by `start.sh` on first boot
-     with `use_uv = True`, as the reference project does.
+     customer's list). Its `config.ini` is pre-seeded at
+     `/workspace/user/__manager/config.ini` by `start.sh` on first boot with
+     `use_uv = True` and `security_level = normal`. (ComfyUI v0.34.2 has
+     `folder_paths.get_system_user_directory`, so current Manager reads
+     `user/__manager`, not the legacy `user/default/ComfyUI-Manager`.)
    - `rgthree/rgthree-comfy`
    - `PGCRT/CRT-Nodes`
    - `Elevenheights/ComfyUI-FameGridColorFinish`
@@ -94,9 +96,13 @@ Single stage. In order:
    controlnet_aux `opencv-python`, CRT-Nodes `opencv-contrib-python`. All
    three unpack into the same `cv2` directory and pip does not de-duplicate
    them. After the node requirements are installed, the Dockerfile
-   uninstalls every `opencv-*` distribution and installs
-   `opencv-contrib-python-headless` alone, which is a superset of the three.
-7. `uv pip install -c constraints.txt jupyterlab "huggingface_hub[hf_xet]" aiohttp`.
+   uninstalls every `opencv-*` distribution (skipped when none is present)
+   and installs `opencv-contrib-python-headless` alone, which is a superset
+   of the three. `PIP_CONSTRAINT`/`UV_CONSTRAINT` point at `constraints.txt`
+   from step 3 on, so node `install.py` scripts that call plain `pip` are
+   constrained too; the variables persist into the running container.
+7. `uv pip install -c constraints.txt jupyterlab "huggingface_hub[hf_xet]"`
+   (`aiohttp` already comes from ComfyUI's requirements).
 8. Copy `start.sh`, `download_models.py`, `utils/`, `models_config.json`,
    `extra_model_paths.yaml`. Copy `extra_model_paths.yaml` into `/opt/ComfyUI/`
    where ComfyUI auto-loads it.
@@ -122,24 +128,29 @@ SageAttention versions.
 | `/workspace/.cache/huggingface` | volume | `HF_HOME`, holds the Xet chunk cache |
 | `/workspace/models_config.json` | volume | the effective model list (see below) |
 
-`extra_model_paths.yaml` lists every ComfyUI model folder name (checkpoints,
-vae, diffusion_models, text_encoders, loras, clip, clip_vision, controlnet,
-upscale_models, unet, ipadapter, style_models, model_patches, embeddings) under
-`base_path: /workspace/models`. `start.sh` creates all of them.
+`extra_model_paths.yaml` lists the 26 model folder names ComfyUI v0.34.2
+registers in `folder_paths.py` (legacy `clip`/`unet` are aliases of
+`text_encoders`/`diffusion_models`; `ipadapter` belongs to a node that is not
+installed) under `base_path: /workspace/models`. `start.sh` creates all of
+them, and a test asserts the two lists match.
 
 ## start.sh
 
 ```
-set defaults (env table below)
+set defaults (env table below); trap TERM/INT and forward to children
 mkdir -p /workspace/{models/*,output,input,user,logs,.cache/huggingface}
-start JupyterLab on 8888 immediately, root /workspace, no token (CUDA_VISIBLE_DEVICES="")
+wipe and recreate $HF_STAGING_DIR (nothing is in flight at boot)
+start JupyterLab on 8888 immediately, root /workspace, token = $JUPYTER_TOKEN
+   (empty = no auth) (CUDA_VISIBLE_DEVICES="")
 resolve models_config.json:
    - if /workspace/models_config.json missing: fetch MODELS_CONFIG_URL if set,
      else copy the baked-in /models_config.json
 python /download_models.py           # skips files already present; log to comfyui.log
    - SKIP_MODEL_DOWNLOAD=true skips this step entirely
    - a failed download logs an error and does NOT abort boot
-start ComfyUI on 8188 with the flags in the table, tee to comfyui.log
+supervise ComfyUI on 8188 in the background: run with the flags below, tee to
+   comfyui.log, and on any exit log the status and restart after
+   $COMFYUI_RESTART_DELAY seconds
 wait
 ```
 
@@ -165,8 +176,14 @@ python main.py --listen 0.0.0.0 --port 8188 \
 | `CIVITAI_TOKEN` | empty | Required for `Consistence Edit Lora` (Civitai returns 401 without it). The other two Civitai LoRAs download anonymously |
 | `MODELS_CONFIG_URL` | empty | Optional URL of a `models_config.json` to use instead of the baked-in one, on first boot only |
 | `SKIP_MODEL_DOWNLOAD` | `false` | Skip the download step |
-| `USE_SAGE_ATTENTION` | `true` | Adds `--use-sage-attention` |
+| `USE_SAGE_ATTENTION` | `true` | Adds `--use-sage-attention` unless the value is `false`/`0`/`no`/`off` (any case) |
 | `COMFYUI_EXTRA_ARGS` | empty | Appended verbatim to the ComfyUI command |
+| `COMFYUI_RESTART_DELAY` | `10` | Seconds before a crashed ComfyUI is restarted |
+| `JUPYTER_TOKEN` | empty | JupyterLab token; empty means no authentication |
+| `MAX_CONCURRENT_DOWNLOADS` | `5` | Parallel downloads; invalid or < 1 falls back to 5 |
+| `DOWNLOAD_HEARTBEAT_SECONDS` | `60` | Interval of the "still downloading" log line |
+| `USE_HF_XET` | `true` | `false` sends Hugging Face URLs through aria2c |
+| `HF_STAGING_DIR` | `/workspace/.hf_staging` | Staging area of the Hugging Face client, wiped at boot |
 | `HF_HOME` | `/workspace/.cache/huggingface` | Xet chunk cache location |
 | `HF_XET_CHUNK_CACHE_SIZE_BYTES` | `8589934592` (8 GiB) | Chunk cache cap. Smaller than the reference project because this model set has little cross-model overlap |
 | `HF_XET_HIGH_PERFORMANCE` | `1` | More concurrency in the Xet client |
@@ -174,7 +191,7 @@ python main.py --listen 0.0.0.0 --port 8188 \
 
 Tokens are only ever sent to their own host (`huggingface.co` / `civitai.com`)
 and are redacted from log lines (reuse `utils/hfAuth.redact_token`, extended to
-cover `CIVITAI_TOKEN`).
+cover `CIVITAI_TOKEN` and `JUPYTER_TOKEN`).
 
 ## Model download
 
@@ -209,17 +226,21 @@ Edit Lora"; the customer's link named no version.
 Backend per URL, as in the reference project:
 
 - `huggingface.co/<repo>/resolve/<rev>/<path>` → `hf_hub_download` with
-  `HF_TOKEN`, which uses Xet where the repo has it. Staged under
-  `/workspace/.hf_staging/<name>` then moved into place so `.cache` metadata
-  never lands in `models/`. On any exception, fall back to aria2c.
-- everything else → `aria2c -x 4 -s 4 -c`, with
+  `HF_TOKEN`, which uses Xet where the repo has it. Staged in a unique
+  `mkdtemp` directory under `$HF_STAGING_DIR` then moved into place so `.cache`
+  metadata never lands in `models/` and concurrent jobs never share a staging
+  dir. On any exception, fall back to aria2c.
+- everything else → `aria2c -x 4 -s 4 -c --show-console-readout=false`
+  (output streamed into the log line by line, one summary every 30 s), with
   `Authorization: Bearer $CIVITAI_TOKEN` added for `civitai.com` hosts and
   `Authorization: Bearer $HF_TOKEN` for `huggingface.co` hosts.
 
-Downloads run concurrently, at most 5 at a time. A file is skipped when
-`<category>/<filename>` already exists. Partial aria2c downloads resume; the HF
-client restarts the file. Failures are logged and the script exits 0 so ComfyUI
-still starts.
+Downloads run concurrently, at most 5 at a time, with a heartbeat line listing
+in-flight files. A file is skipped when `<category>/<filename>` exists and has
+no sibling `<filename>.aria2` control file; with one, the job is planned and
+aria2c resumes it. The HF client restarts the file and removes a stale
+`.aria2` on success. Failures (including a job raising) are logged and the
+script exits 0 so ComfyUI still starts.
 
 ## CI
 
@@ -232,10 +253,13 @@ still starts.
   (passed as Buildx secret `github_token`).
 - build arg `SAGEATTENTION_WHEEL_URL` set from a repository variable so the
   wheel can be swapped without editing the Dockerfile.
-- GHA layer cache (`type=gha,mode=max`). Free runner disk is tight for a
-  ~12 GB image, so the workflow removes `/usr/share/dotnet`,
-  `/opt/ghc` and `/usr/local/lib/android` before building, as the reference's
-  disabled GHCR workflow does.
+- Registry layer cache at `promptalchemist/comfyui-runpod-jnkprod:buildcache`
+  (read on every run, written only on non-PR runs). The GHA cache is not used:
+  its 10 GB limit is below the image size. Free runner disk is tight for a
+  ~12 GB image, so before Buildx the workflow removes `/usr/share/dotnet`,
+  `/opt/ghc`, `/usr/local/lib/android`, `/usr/local/.ghcup`,
+  `/opt/hostedtoolcache` and friends, and merges `"data-root": "/mnt/docker"`
+  into `/etc/docker/daemon.json` so layers land on the runner's larger disk.
 
 GitHub repository: `poomshift/comfyui-runpod-jnkprod`.
 
