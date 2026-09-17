@@ -57,6 +57,10 @@ ensure_dirs() {
     for f in "${MODEL_FOLDERS[@]}"; do
         mkdir -p "$WORKSPACE/models/$f"
     done
+    # --models-directory hides the SD1/SD2 yaml configs bundled in the image's
+    # models/configs, so copy them to the volume, never over an existing file.
+    # A missing source folder or a file already there is silent and non-fatal.
+    cp -n "$COMFY_DIR"/models/configs/*.yaml "$WORKSPACE/models/configs/" 2>/dev/null || true
     touch "$LOG_PATH"
 }
 

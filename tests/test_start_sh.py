@@ -45,6 +45,40 @@ def test_ensure_dirs_creates_workspace_layout(tmp_path):
         assert (ws / sub).is_dir(), sub
 
 
+def test_ensure_dirs_copies_bundled_model_configs_without_overwriting(tmp_path):
+    # --models-directory hides /opt/ComfyUI/models/configs, so its bundled
+    # yaml files are copied to the volume, never over a file already there.
+    src = tmp_path / "comfy" / "models" / "configs"
+    src.mkdir(parents=True)
+    (src / "a.yaml").write_text("bundled a")
+    (src / "c.yaml").write_text("bundled c")
+    dst = tmp_path / "workspace" / "models" / "configs"
+    dst.mkdir(parents=True)
+    (dst / "b.yaml").write_text("customer b")
+    (dst / "c.yaml").write_text("customer c")
+
+    r = run_fn(tmp_path, "ensure_dirs")
+    assert r.returncode == 0, r.stderr
+    assert (dst / "a.yaml").read_text() == "bundled a"
+    assert (dst / "b.yaml").read_text() == "customer b"
+    assert (dst / "c.yaml").read_text() == "customer c"
+
+    (dst / "a.yaml").write_text("edited a")
+    r = run_fn(tmp_path, "ensure_dirs; echo done")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip().splitlines()[-1] == "done"
+    assert (dst / "a.yaml").read_text() == "edited a"
+
+
+def test_ensure_dirs_succeeds_without_bundled_model_configs(tmp_path):
+    r = run_fn(tmp_path, "ensure_dirs; echo done")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip().splitlines()[-1] == "done"
+    assert r.stderr == ""
+    assert (tmp_path / "workspace" / "models" / "configs").is_dir()
+    assert list((tmp_path / "workspace" / "models" / "configs").iterdir()) == []
+
+
 def test_ensure_dirs_wipes_orphaned_hf_staging(tmp_path):
     stale = tmp_path / "workspace" / ".hf_staging" / "old"
     stale.mkdir(parents=True)
