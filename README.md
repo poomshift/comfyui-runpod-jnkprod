@@ -109,6 +109,11 @@ versions fails to install instead of breaking ComfyUI.
 The four detector and SAM files, used by Onyx Detailer and Impact-Pack's
 detailers, add about 0.5 GB to the first download.
 
+A pod whose volume already has `/workspace/models_config.json` from an earlier
+image keeps that file, so it does not download these four models and their
+node lists stay empty. To get them, delete it (or add the four entries to it)
+and restart the pod.
+
 ## Adding models
 
 Either drop files into the matching folder under `/workspace/models/`, or edit
