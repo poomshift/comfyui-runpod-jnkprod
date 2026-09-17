@@ -44,14 +44,20 @@ RUN git clone --depth 1 --branch ${COMFYUI_TAG} https://github.com/comfyanonymou
 # 3. SageAttention, prebuilt for this exact torch/CUDA (see scripts/build-sageattention.sh).
 RUN uv pip install -c /app/constraints.txt "${SAGEATTENTION_WHEEL_URL}"
 
-# 4. Public custom nodes.
+# 4. Public custom nodes. The last four are packs Onyx_Custom_Nodes needs:
+#    Impact-Pack and Impact-Subpack (OnyxDetailer), Frame-Interpolation (its
+#    batched RIFE node, found by folder name) and Custom-Scripts.
 WORKDIR /opt/ComfyUI/custom_nodes
 RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager \
     && git clone --depth 1 https://github.com/rgthree/rgthree-comfy \
     && git clone --depth 1 https://github.com/PGCRT/CRT-Nodes \
     && git clone --depth 1 https://github.com/Elevenheights/ComfyUI-FameGridColorFinish \
     && git clone --depth 1 https://github.com/BigStationW/ComfyUi-TextEncodeEditAdvanced \
-    && git clone --depth 1 https://github.com/Fannovel16/comfyui_controlnet_aux
+    && git clone --depth 1 https://github.com/Fannovel16/comfyui_controlnet_aux \
+    && git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Pack \
+    && git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Subpack \
+    && git clone --depth 1 https://github.com/Fannovel16/ComfyUI-Frame-Interpolation \
+    && git clone --depth 1 https://github.com/pythongosssss/ComfyUI-Custom-Scripts
 
 # 5. Private custom node. The token is read from a BuildKit secret, turned
 #    into a basic `x-access-token` auth header (GitHub's git-over-HTTPS
@@ -65,15 +71,32 @@ RUN --mount=type=secret,id=github_token \
         clone --depth 1 https://github.com/onyxaipro/Onyx_Custom_Nodes \
     && rm -rf Onyx_Custom_Nodes/.git
 
-# 6. Node dependencies, one install per requirements.txt so a failure names the node.
-#    Then collapse the three OpenCV variants the nodes ask for into one package:
+# 6. Node dependencies, one install per requirements file so a failure names the node.
+#    - skip_download_model stops the Impact-Pack and Impact-Subpack installers
+#      from baking models into the image; start.sh downloads them to the volume.
+#    - Impact-Pack asks for SAM 2 as a bare git+https URL. Its build needs torch,
+#      so it builds against the image's torch without CUDA kernels
+#      (SAM2_BUILD_CUDA=0) instead of pulling a second torch into an isolated
+#      build env. uv has no per-package isolation variable, and its
+#      --no-build-isolation-package flag cannot match a requirement that has no
+#      name until it is built, so that one requirements file installs with
+#      --no-build-isolation; setuptools and wheel cover its other sdists.
+#    - Frame-Interpolation has no requirements.txt. Its install.py only knows
+#      CUDA <= 12 and would pip install the wrong cupy; RIFE does not need cupy.
+#    Then collapse the OpenCV variants the nodes ask for into one package:
 #    they all unpack into the same cv2/ directory and pip does not de-duplicate.
 #    `uv pip uninstall` with no names is an error, hence the guard.
-RUN set -e; for req in */requirements.txt; do \
-        echo "==> $req"; uv pip install -c /app/constraints.txt -r "$req"; \
+RUN set -e; export SAM2_BUILD_CUDA=0; \
+    touch /opt/ComfyUI/custom_nodes/skip_download_model; \
+    uv pip install -c /app/constraints.txt setuptools wheel; \
+    for req in */requirements.txt ComfyUI-Frame-Interpolation/requirements-no-cupy.txt; do \
+        isolation=; case "$req" in ComfyUI-Impact-Pack/*) isolation=--no-build-isolation ;; esac; \
+        echo "==> $req"; uv pip install -c /app/constraints.txt $isolation -r "$req"; \
     done; \
     for inst in */install.py; do \
-        [ -f "$inst" ] || continue; echo "==> $inst"; (cd "$(dirname "$inst")" && python install.py); \
+        [ -f "$inst" ] || continue; \
+        case "$inst" in ComfyUI-Frame-Interpolation/*) echo "==> skipping $inst"; continue ;; esac; \
+        echo "==> $inst"; (cd "$(dirname "$inst")" && python install.py); \
     done; \
     pkgs=$(uv pip freeze | grep -iE '^opencv' | cut -d= -f1 || true); \
     if [ -n "$pkgs" ]; then uv pip uninstall $pkgs; fi; \
