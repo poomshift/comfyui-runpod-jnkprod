@@ -13,5 +13,15 @@
     {"url": "https://civitai.com/api/download/models/2760799?fileId=2647078", "filename": "HighResolution9B.safetensors"},
     {"url": "https://civitai.com/api/download/models/2777498?fileId=2663630", "filename": "Samsung_fluxklein9b.safetensors"},
     {"url": "https://civitai.com/api/download/models/2863285?fileId=2747224", "filename": "f2k_9B_lcs_consist_20260415.safetensors"}
+  ],
+  "ultralytics/bbox": [
+    "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt",
+    "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8s.pt"
+  ],
+  "ultralytics/segm": [
+    "https://huggingface.co/Bingsu/adetailer/resolve/main/person_yolov8m-seg.pt"
+  ],
+  "sams": [
+    "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
   ]
 }
