@@ -39,6 +39,8 @@ def test_dockerfile_contract():
     assert "mkdir -p /tmp/ci-user /tmp/ci-out" in text
     assert "EXPOSE 8188 8888" in text
     assert 'CMD ["/app/start.sh"]' in text
+    # start.sh passes --models-directory; the yaml it replaced must not come back.
+    assert "extra_model_paths" not in text
     # every pip install in the image is constrained
     for line in text.splitlines():
         if "uv pip install" in line and "constraints.txt" not in line and "--find-links" not in line:

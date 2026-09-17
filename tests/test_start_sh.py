@@ -4,7 +4,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
+
+from tests.constants import COMFY_MODEL_FOLDERS, CUSTOM_NODE_MODEL_FOLDERS
 
 ROOT = Path(__file__).resolve().parents[1]
 START = ROOT / "start.sh"
@@ -39,6 +40,7 @@ def test_ensure_dirs_creates_workspace_layout(tmp_path):
     assert r.returncode == 0, r.stderr
     ws = tmp_path / "workspace"
     for sub in ("models/loras", "models/diffusion_models", "models/vae", "models/text_encoders",
+                "models/sams", "models/onnx", "models/ultralytics/bbox", "models/ultralytics/segm",
                 "output", "input", "user", "logs", ".cache/huggingface"):
         assert (ws / sub).is_dir(), sub
 
@@ -129,6 +131,9 @@ def test_comfy_args_default_and_disabled_sage(tmp_path):
     assert args[args.index("--output-directory") + 1] == f"{ws}/output"
     assert args[args.index("--input-directory") + 1] == f"{ws}/input"
     assert args[args.index("--user-directory") + 1] == f"{ws}/user"
+    # Custom nodes (Impact-Pack, Impact-Subpack) register their model folders
+    # under models_dir at import, so it must be the volume, not the image.
+    assert args[args.index("--models-directory") + 1] == f"{ws}/models"
 
     r = run_fn(tmp_path, "comfy_args", env={"USE_SAGE_ATTENTION": "false", "COMFYUI_EXTRA_ARGS": "--fast --lowvram"})
     args = r.stdout.split()
@@ -199,14 +204,11 @@ def test_resolve_models_config_rejects_invalid_json_url(tmp_path):
     assert not (tmp_path / "workspace" / "models_config.json.tmp").exists()
 
 
-def test_model_folders_match_extra_model_paths(tmp_path):
+def test_model_folders_cover_comfy_and_custom_node_folders(tmp_path):
     r = run_fn(tmp_path, 'printf "%s\\n" "${MODEL_FOLDERS[@]}"')
     assert r.returncode == 0, r.stderr
     printed = set(r.stdout.split())
-    cfg = yaml.safe_load((ROOT / "extra_model_paths.yaml").read_text())
-    section = cfg["runpod"]
-    expected = {k for k in section if k not in ("base_path", "is_default")}
-    assert printed == expected
+    assert printed == COMFY_MODEL_FOLDERS | CUSTOM_NODE_MODEL_FOLDERS
 
 
 def test_supervise_comfyui_restarts_after_crash(tmp_path):

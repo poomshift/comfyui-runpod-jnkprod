@@ -99,10 +99,9 @@ RUN python -c "import torch, torchvision, torchaudio, triton, sageattention, com
 
 # 9. App files.
 WORKDIR /app
-COPY start.sh download_models.py models_config.json extra_model_paths.yaml ./
+COPY start.sh download_models.py models_config.json ./
 COPY utils/ ./utils/
-RUN chmod +x /app/start.sh \
-    && cp /app/extra_model_paths.yaml /opt/ComfyUI/extra_model_paths.yaml
+RUN chmod +x /app/start.sh
 
 LABEL org.opencontainers.image.title="comfyui-runpod-jnkprod" \
       org.opencontainers.image.description="ComfyUI ${COMFYUI_TAG}, torch 2.13.0+cu130, SageAttention 2.2.0, Python 3.12" \

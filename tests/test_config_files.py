@@ -1,19 +1,9 @@
 import json
 from pathlib import Path
 
-import yaml
+from tests.constants import COMFY_MODEL_FOLDERS
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# Every folder name ComfyUI v0.36.0 knows, minus custom_nodes (stays in the image)
-COMFY_MODEL_FOLDERS = {
-    "audio_encoders", "background_removal", "checkpoints", "classifiers",
-    "clip_vision", "configs", "controlnet", "datasets", "detection",
-    "diffusers", "diffusion_models", "embeddings", "frame_interpolation",
-    "geometry_estimation", "gligen", "hypernetworks", "latent_upscale_models",
-    "loras", "model_patches", "optical_flow", "photomaker", "style_models",
-    "text_encoders", "upscale_models", "vae", "vae_approx",
-}
 
 
 def test_constraints_pin_torch_stack():
@@ -26,17 +16,6 @@ def test_constraints_pin_torch_stack():
         "numpy>=2,<3",
     ):
         assert line in text.splitlines(), line
-
-
-def test_extra_model_paths_cover_every_comfy_folder():
-    cfg = yaml.safe_load((ROOT / "extra_model_paths.yaml").read_text())
-    section = cfg["runpod"]
-    assert section["base_path"] == "/workspace/models"
-    assert section["is_default"] is True
-    folders = {k for k in section if k not in ("base_path", "is_default")}
-    assert folders == COMFY_MODEL_FOLDERS
-    for name in folders:
-        assert section[name] == name, f"{name} must map to a folder of the same name"
 
 
 def test_models_config_entries_are_well_formed():
