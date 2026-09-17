@@ -46,8 +46,9 @@ def test_dockerfile_contract():
     for node in ONYX_DEPENDENCY_NODES:
         assert f"git clone --depth 1 {node} " in text or f"git clone --depth 1 {node}\n" in text, node
     assert "opencv-contrib-python-headless" in text
-    assert "--quick-test-for-ci" in text
-    assert "mkdir -p /tmp/ci-user /tmp/ci-out" in text
+    # The smoke test fetches /object_info; --quick-test-for-ci only imported nodes.
+    assert "--quick-test-for-ci" not in text
+    assert "COPY docker/smoke_test.sh /app/smoke_test.sh" in text
     assert "EXPOSE 8188 8888" in text
     assert 'CMD ["/app/start.sh"]' in text
     # start.sh passes --models-directory; the yaml it replaced must not come back.
@@ -62,6 +63,10 @@ def test_dockerignore_excludes_dev_files():
     text = (ROOT / ".dockerignore").read_text().splitlines()
     for pattern in (".git", ".venv", "tests", "docs", "scripts", ".github", "__pycache__", "*.pyc"):
         assert pattern in text, pattern
+    # docker/smoke_test.sh is part of the build context.
+    for line in text:
+        assert not line.strip().lstrip("/").startswith("docker"), line
+        assert line.strip() not in ("*", "**"), line
 
 
 def _run_bodies():
@@ -192,3 +197,17 @@ def test_node_deps_step_runs_the_expected_installs(tmp_path):
 
     assert "uv pip uninstall opencv-contrib-python opencv-python|SAM2_BUILD_CUDA=0|skip=yes" in calls
     assert calls[-1].startswith("uv pip install -c /app/constraints.txt opencv-contrib-python-headless|")
+
+
+def test_smoke_test_script_is_copied_right_before_the_run_that_uses_it():
+    lines = [ln for ln in (ROOT / "Dockerfile").read_text().splitlines()
+             if ln.strip() and not ln.lstrip().startswith("#")]
+    copy = lines.index("COPY docker/smoke_test.sh /app/smoke_test.sh")
+    # Late in the file, so editing the script re-runs only the smoke test.
+    node_deps = next(i for i, ln in enumerate(lines) if "*/requirements.txt" in ln)
+    services = next(i for i, ln in enumerate(lines) if "jupyterlab" in ln)
+    assert node_deps < services < copy
+    assert lines[copy + 1].startswith("RUN ")
+    body = next(b for b in _run_bodies() if "/app/smoke_test.sh" in b)
+    assert "assert torch.__version__.startswith('2.13.0+cu130')" in body
+    assert body.index("torch.__version__") < body.index("bash /app/smoke_test.sh")

@@ -105,20 +105,19 @@ RUN set -e; export SAM2_BUILD_CUDA=0; \
 # 7. Services and downloader dependencies.
 RUN uv pip install -c /app/constraints.txt jupyterlab "huggingface_hub[hf_xet]"
 
-# 8. Build-time smoke test: the torch stack imports, is still the cu130 build a
-#    node installer could have replaced, and every custom node loads. Runs on CPU
-#    so it works on a GPU-less CI runner. Kept above the app COPY so editing
-#    start.sh or download_models.py does not re-run the quick test.
+# 8. Build-time smoke test: the torch stack imports and is still the cu130 build
+#    a node installer could have replaced; then docker/smoke_test.sh starts
+#    ComfyUI and fetches /object_info, which runs every node's INPUT_TYPES and so
+#    catches dependencies a node only imports there (OnyxDetailer -> Impact-Pack).
+#    Runs on CPU so it works on a GPU-less CI runner. The script is copied right
+#    here, and kept above the app COPY, so editing it, start.sh or
+#    download_models.py re-runs nothing before this step.
 WORKDIR /opt/ComfyUI
+COPY docker/smoke_test.sh /app/smoke_test.sh
 RUN python -c "import torch, torchvision, torchaudio, triton, sageattention, comfy_kitchen, comfy_aimdo; \
         print('torch', torch.__version__, 'cuda', torch.version.cuda, 'triton', triton.__version__); \
         assert torch.__version__.startswith('2.13.0+cu130'), torch.__version__" \
-    && mkdir -p /tmp/ci-user /tmp/ci-out \
-    && (python main.py --cpu --quick-test-for-ci --user-directory /tmp/ci-user --output-directory /tmp/ci-out \
-        > /tmp/quick-test.log 2>&1 || (cat /tmp/quick-test.log; echo "quick test exited non-zero"; exit 1)) \
-    && cat /tmp/quick-test.log \
-    && ! grep -E "IMPORT FAILED|Cannot import" /tmp/quick-test.log \
-    && rm -rf /tmp/ci-user /tmp/ci-out /tmp/quick-test.log
+    && bash /app/smoke_test.sh
 
 # 9. App files.
 WORKDIR /app
