@@ -33,10 +33,14 @@ export HF_HUB_DISABLE_PROGRESS_BARS="${HF_HUB_DISABLE_PROGRESS_BARS:-1}"
 # Per-download temp dirs for the Hugging Face client; read by download_models.py.
 export HF_STAGING_DIR="${HF_STAGING_DIR:-$WORKSPACE/.hf_staging}"
 
+# ComfyUI's own model folders, then the ones custom nodes register under
+# --models-directory at import: sams and onnx (Impact-Pack), ultralytics/bbox
+# and ultralytics/segm (Impact-Subpack).
 MODEL_FOLDERS=(audio_encoders background_removal checkpoints classifiers clip_vision configs
     controlnet datasets detection diffusers diffusion_models embeddings frame_interpolation
     geometry_estimation gligen hypernetworks latent_upscale_models loras model_patches
-    optical_flow photomaker style_models text_encoders upscale_models vae vae_approx)
+    optical_flow photomaker style_models text_encoders upscale_models vae vae_approx
+    sams onnx ultralytics/bbox ultralytics/segm)
 
 log() { echo "[start] $*" | tee -a "$LOG_PATH"; }
 
@@ -53,6 +57,10 @@ ensure_dirs() {
     for f in "${MODEL_FOLDERS[@]}"; do
         mkdir -p "$WORKSPACE/models/$f"
     done
+    # --models-directory hides the SD1/SD2 yaml configs bundled in the image's
+    # models/configs, so copy them to the volume, never over an existing file.
+    # A missing source folder or a file already there is silent and non-fatal.
+    cp -n "$COMFY_DIR"/models/configs/*.yaml "$WORKSPACE/models/configs/" 2>/dev/null || true
     touch "$LOG_PATH"
 }
 
@@ -138,7 +146,8 @@ comfy_args() {
     local args=(--listen 0.0.0.0 --port 8188
         --output-directory "$WORKSPACE/output"
         --input-directory "$WORKSPACE/input"
-        --user-directory "$WORKSPACE/user")
+        --user-directory "$WORKSPACE/user"
+        --models-directory "$WORKSPACE/models")
     # On unless explicitly disabled, in any letter case.
     local sage
     sage=$(printf '%s' "$USE_SAGE_ATTENTION" | tr '[:upper:]' '[:lower:]')

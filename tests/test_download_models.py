@@ -56,6 +56,45 @@ def test_plan_downloads_skips_existing_unless_forced(tmp_path):
     assert [j.filename for j in forced] == ["have.safetensors", "need.safetensors", "vae.safetensors"]
 
 
+def test_plan_downloads_supports_nested_categories(tmp_path):
+    url = "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt"
+    jobs = dm.plan_downloads({"ultralytics/bbox": [url]}, tmp_path)
+    assert (tmp_path / "ultralytics" / "bbox").is_dir()
+    assert [(j.category, j.url, j.filename, j.dest_dir) for j in jobs] == [
+        ("ultralytics/bbox", url, "face_yolov8m.pt", tmp_path / "ultralytics" / "bbox")
+    ]
+
+
+def test_plan_downloads_rejects_categories_that_escape_the_models_dir(tmp_path, caplog):
+    models = tmp_path / "models"
+    models.mkdir()
+    outside = tmp_path / "outside"
+    cfg = {
+        str(outside): ["https://h/abs.safetensors"],
+        "../escape": ["https://h/up.safetensors"],
+        "loras/../../escape2": ["https://h/up2.safetensors"],
+        "sams": ["https://h/ok.pth"],
+    }
+
+    caplog.set_level(logging.INFO, logger="download_models")
+    dm.logger.addHandler(caplog.handler)
+    try:
+        jobs = dm.plan_downloads(cfg, models)
+    finally:
+        dm.logger.removeHandler(caplog.handler)
+
+    assert [(j.category, j.filename) for j in jobs] == [("sams", "ok.pth")]
+    assert not outside.exists()
+    assert not (tmp_path / "escape").exists()
+    assert not (tmp_path / "escape2").exists()
+    assert not (models / "loras").exists()
+    # A set: the record can reach caplog twice, through the root logger and the handler.
+    errors = {r.getMessage() for r in caplog.records if r.levelno == logging.ERROR}
+    assert len(errors) == 3, caplog.text
+    for category in (str(outside), "../escape", "loras/../../escape2"):
+        assert category in caplog.text
+
+
 def test_plan_downloads_resumes_a_partial_aria2c_download(tmp_path, caplog):
     loras = tmp_path / "loras"
     loras.mkdir()

@@ -76,6 +76,8 @@ automatically on the next start.
 | Path | Contents |
 | --- | --- |
 | `/workspace/models/<type>/` | all models (`diffusion_models`, `text_encoders`, `vae`, `loras`, ...) |
+| `/workspace/models/ultralytics/` | face, hand and person detectors (`bbox/`, `segm/`) for Impact-Pack and Onyx Detailer |
+| `/workspace/models/sams/` | Segment Anything models for Impact-Pack and Onyx Detailer |
 | `/workspace/output` | generated images |
 | `/workspace/input` | uploaded inputs |
 | `/workspace/user` | saved workflows, ComfyUI settings, ComfyUI-Manager config |
@@ -99,6 +101,18 @@ versions fails to install instead of breaking ComfyUI.
 | loras | `HighResolution9B.safetensors` | Civitai 2436859 |
 | loras | `Samsung_fluxklein9b.safetensors` | Civitai 1551668 |
 | loras | `f2k_9B_lcs_consist_20260415.safetensors` | Civitai 1939453 |
+| ultralytics/bbox | `face_yolov8m.pt` | Bingsu/adetailer |
+| ultralytics/bbox | `hand_yolov8s.pt` | Bingsu/adetailer |
+| ultralytics/segm | `person_yolov8m-seg.pt` | Bingsu/adetailer |
+| sams | `sam_vit_b_01ec64.pth` | Meta Segment Anything (dl.fbaipublicfiles.com) |
+
+The four detector and SAM files, used by Onyx Detailer and Impact-Pack's
+detailers, add about 0.5 GB to the first download.
+
+A pod whose volume already has `/workspace/models_config.json` from an earlier
+image keeps that file, so it does not download these four models and their
+node lists stay empty. To get them, delete it (or add the four entries to it)
+and restart the pod.
 
 ## Adding models
 
@@ -135,7 +149,12 @@ JupyterLab, which can read HF_TOKEN and CIVITAI_TOKEN. Do not share the URL.
 ## Custom nodes
 
 ComfyUI-Manager, rgthree-comfy, CRT-Nodes, ComfyUI-FameGridColorFinish,
-ComfyUi-TextEncodeEditAdvanced, comfyui_controlnet_aux, Onyx_Custom_Nodes.
+ComfyUi-TextEncodeEditAdvanced, comfyui_controlnet_aux, Onyx_Custom_Nodes,
+ComfyUI-Impact-Pack, ComfyUI-Impact-Subpack, ComfyUI-Frame-Interpolation,
+ComfyUI-Custom-Scripts.
+
+The last four are there because Onyx_Custom_Nodes needs them (Onyx Detailer
+and its batched RIFE node).
 
 ## Building the image yourself
 

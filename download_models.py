@@ -19,7 +19,7 @@ import sys
 import traceback
 from collections import deque
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 from urllib.request import urlopen
 
@@ -89,6 +89,15 @@ def _aria2_control_file(dest_dir, filename):
     return Path(dest_dir) / (filename + ".aria2")
 
 
+def _category_escapes(category):
+    """True when a category would leave models_dir: an absolute path or a '..' segment.
+
+    Nested categories such as "ultralytics/bbox" are fine.
+    """
+    path = PurePosixPath(category)
+    return path.is_absolute() or ".." in path.parts
+
+
 def plan_downloads(config, models_dir, force=False):
     """Turn the config into Jobs, creating category dirs and skipping present files."""
     models_dir = Path(models_dir)
@@ -97,6 +106,11 @@ def plan_downloads(config, models_dir, force=False):
     for category, entries in config.items():
         if not isinstance(entries, list):
             logger.warning("Skipping '%s': not a list", category)
+            continue
+
+        if _category_escapes(category):
+            logger.error("Skipping category '%s': it must be a folder inside %s, "
+                         "not an absolute path or one with '..'", category, models_dir)
             continue
 
         dest_dir = models_dir / category

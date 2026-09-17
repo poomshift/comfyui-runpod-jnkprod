@@ -1,19 +1,9 @@
 import json
 from pathlib import Path
 
-import yaml
+from tests.constants import COMFY_MODEL_FOLDERS, CUSTOM_NODE_MODEL_FOLDERS
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# Every folder name ComfyUI v0.36.0 knows, minus custom_nodes (stays in the image)
-COMFY_MODEL_FOLDERS = {
-    "audio_encoders", "background_removal", "checkpoints", "classifiers",
-    "clip_vision", "configs", "controlnet", "datasets", "detection",
-    "diffusers", "diffusion_models", "embeddings", "frame_interpolation",
-    "geometry_estimation", "gligen", "hypernetworks", "latent_upscale_models",
-    "loras", "model_patches", "optical_flow", "photomaker", "style_models",
-    "text_encoders", "upscale_models", "vae", "vae_approx",
-}
 
 
 def test_constraints_pin_torch_stack():
@@ -28,30 +18,20 @@ def test_constraints_pin_torch_stack():
         assert line in text.splitlines(), line
 
 
-def test_extra_model_paths_cover_every_comfy_folder():
-    cfg = yaml.safe_load((ROOT / "extra_model_paths.yaml").read_text())
-    section = cfg["runpod"]
-    assert section["base_path"] == "/workspace/models"
-    assert section["is_default"] is True
-    folders = {k for k in section if k not in ("base_path", "is_default")}
-    assert folders == COMFY_MODEL_FOLDERS
-    for name in folders:
-        assert section[name] == name, f"{name} must map to a folder of the same name"
-
-
 def test_models_config_entries_are_well_formed():
     cfg = json.loads((ROOT / "models_config.json").read_text())
-    assert set(cfg) <= COMFY_MODEL_FOLDERS
+    assert set(cfg) <= COMFY_MODEL_FOLDERS | CUSTOM_NODE_MODEL_FOLDERS
+    model_suffixes = (".safetensors", ".pt", ".pth")
     for category, entries in cfg.items():
         assert isinstance(entries, list), category
         for entry in entries:
             if isinstance(entry, str):
                 assert entry.startswith("https://")
-                assert entry.rsplit("/", 1)[-1].endswith(".safetensors")
+                assert entry.rsplit("/", 1)[-1].endswith(model_suffixes), entry
             else:
                 assert set(entry) == {"url", "filename"}, entry
                 assert entry["url"].startswith("https://")
-                assert entry["filename"].endswith(".safetensors")
+                assert entry["filename"].endswith(model_suffixes), entry
 
 
 def test_models_config_lists_the_customer_files():
@@ -68,5 +48,18 @@ def test_models_config_lists_the_customer_files():
         "HighResolution9B.safetensors",
         "Samsung_fluxklein9b.safetensors",
         "f2k_9B_lcs_consist_20260415.safetensors",
+        # Impact-Pack / Impact-Subpack detectors and SAM, used by Onyx's detailers.
+        "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt",
+        "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8s.pt",
+        "https://huggingface.co/Bingsu/adetailer/resolve/main/person_yolov8m-seg.pt",
+        "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
     ):
         assert expected in names, expected
+
+
+def test_models_config_puts_detectors_where_impact_looks():
+    cfg = json.loads((ROOT / "models_config.json").read_text())
+    assert "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt" in cfg["ultralytics/bbox"]
+    assert "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8s.pt" in cfg["ultralytics/bbox"]
+    assert "https://huggingface.co/Bingsu/adetailer/resolve/main/person_yolov8m-seg.pt" in cfg["ultralytics/segm"]
+    assert "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth" in cfg["sams"]
