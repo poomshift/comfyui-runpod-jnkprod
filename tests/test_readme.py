@@ -16,5 +16,6 @@ def test_readme_documents_ports_env_and_layout():
         "ComfyUI-Manager", "--use-sage-attention",
         "JUPYTER_TOKEN", "60 GB", "Security",
         "MAX_CONCURRENT_DOWNLOADS", "USE_HF_XET", "DOWNLOAD_HEARTBEAT_SECONDS",
+        "ComfyUI-Impact-Pack", "face_yolov8m.pt",
     ):
         assert needle in text, needle

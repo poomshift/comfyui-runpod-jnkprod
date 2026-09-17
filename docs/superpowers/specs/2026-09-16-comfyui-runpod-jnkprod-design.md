@@ -50,8 +50,8 @@ Dockerfile
 .dockerignore
 start.sh                      boot script (CMD)
 constraints.txt               torch/triton pins used by every pip install
-extra_model_paths.yaml        points ComfyUI at /workspace/models
 models_config.json            default model list, baked into the image
+docker/smoke_test.sh          build-time smoke test (starts ComfyUI, checks /object_info)
 download_models.py            boot-time downloader (from reference, trimmed)
 utils/hfDownload.py           HF resolve-URL parser + hf_hub_download wrapper (from reference)
 utils/hfAuth.py               HF token lookup + redaction (from reference)
@@ -87,6 +87,12 @@ Single stage. In order:
    - `Elevenheights/ComfyUI-FameGridColorFinish`
    - `BigStationW/ComfyUi-TextEncodeEditAdvanced`
    - `Fannovel16/comfyui_controlnet_aux`
+   - `ltdrdata/ComfyUI-Impact-Pack`, `ltdrdata/ComfyUI-Impact-Subpack`,
+     `Fannovel16/ComfyUI-Frame-Interpolation`, `pythongosssss/ComfyUI-Custom-Scripts`
+     — packs Onyx_Custom_Nodes needs: OnyxDetailer imports `impact.*` and
+     `subcore` inside `INPUT_TYPES`, the batched RIFE node imports
+     `vfi_utils`/`vfi_models` from a folder named ComfyUI-Frame-Interpolation
+     next to itself, and Onyx's own install script adds Custom-Scripts.
    - `onyxaipro/Onyx_Custom_Nodes` — private. Cloned with
      `RUN --mount=type=secret,id=github_token` using
      `git -c http.extraheader="AUTHORIZATION: basic <base64 of x-access-token:$token>"`,
@@ -94,7 +100,24 @@ Single stage. In order:
    Then one `uv pip install -c constraints.txt -r` per `requirements.txt`
    found under `custom_nodes/`, plus any `install.py` a node ships. A failing
    node install fails the build (no `|| true`) so a broken node is noticed at
-   build time, not on the customer's pod.
+   build time, not on the customer's pod. Around that loop:
+   - `custom_nodes/skip_download_model` is created first, so the Impact-Pack
+     and Impact-Subpack installers do not download models into the image;
+     the models come from `models_config.json` at boot.
+   - Impact-Pack requires SAM 2 as a bare `git+https://github.com/facebookresearch/sam2`
+     (distribution `SAM-2`, build requires setuptools and torch). It is built
+     against the image's torch with `SAM2_BUILD_CUDA=0` (no CUDA kernels)
+     after `uv pip install setuptools wheel`. uv has no
+     `UV_NO_BUILD_ISOLATION_PACKAGE` variable, and `--no-build-isolation-package
+     sam-2` cannot match a requirement that has no name until uv builds its
+     metadata (checked with uv 0.10.0 and 0.12.15), so Impact-Pack's
+     requirements file alone is installed with `--no-build-isolation`. Its
+     other source-only dependencies (`iopath`, `antlr4-python3-runtime`) only
+     need setuptools.
+   - ComfyUI-Frame-Interpolation has no `requirements.txt`; its
+     `requirements-no-cupy.txt` is installed explicitly and its `install.py`
+     is skipped (it only knows CUDA <= 12 and would pip install the wrong
+     cupy; RIFE does not need cupy).
 
    The nodes disagree on OpenCV: Onyx wants `opencv-python-headless`,
    controlnet_aux `opencv-python`, CRT-Nodes `opencv-contrib-python`. All
@@ -102,18 +125,32 @@ Single stage. In order:
    them. After the node requirements are installed, the Dockerfile
    uninstalls every `opencv-*` distribution (skipped when none is present)
    and installs `opencv-contrib-python-headless` alone, which is a superset
-   of the three. `PIP_CONSTRAINT`/`UV_CONSTRAINT` point at `constraints.txt`
-   from step 3 on, so node `install.py` scripts that call plain `pip` are
-   constrained too; the variables persist into the running container.
+   of the three (and of Frame-Interpolation's `opencv-contrib-python`).
+   `PIP_CONSTRAINT`/`UV_CONSTRAINT` point at `constraints.txt` from step 3 on,
+   so node `install.py` scripts that call plain `pip` are constrained too; the
+   variables persist into the running container.
 7. `uv pip install -c constraints.txt jupyterlab "huggingface_hub[hf_xet]"`
    (`aiohttp` already comes from ComfyUI's requirements).
-8. Copy `start.sh`, `download_models.py`, `utils/`, `models_config.json`,
-   `extra_model_paths.yaml`. Copy `extra_model_paths.yaml` into `/opt/ComfyUI/`
-   where ComfyUI auto-loads it.
-9. Build-time smoke test as a `RUN`:
+8. Copy `start.sh`, `download_models.py`, `utils/`, `models_config.json`.
+9. Build-time smoke test as a `RUN` (placed before step 8 in the Dockerfile so
+   editing the app files does not re-run it):
    `python -c "import torch, torchvision, torchaudio, triton, sageattention, comfy_kitchen, comfy_aimdo"`
-   and `python /opt/ComfyUI/main.py --cpu --quick-test-for-ci` (loads every
-   custom node once). Fails the build if any node cannot import.
+   plus a torch `2.13.0+cu130` assertion, then `docker/smoke_test.sh`, copied
+   to `/app/smoke_test.sh` right before that `RUN`. From `/opt/ComfyUI` the
+   script starts `python main.py --cpu --listen 127.0.0.1 --port 8199
+   --disable-auto-launch` with user, output, input and models directories
+   under `/tmp/ci`, polls `/object_info` every 2 s for up to 300 s (fails if
+   the server exits first or the time runs out), stops the server, prints its
+   log and fails on `IMPORT FAILED`, `Cannot import` or `An error occurred
+   while retrieving information`. `/object_info` calls every node's
+   `INPUT_TYPES`, so it catches dependencies imported only there, which
+   `--quick-test-for-ci` (import only) missed for OnyxDetailer. Finally it
+   fails unless `/object_info` lists `OnyxDetailer`, `FaceDetailer`,
+   `SAMLoader`, `UltralyticsDetectorProvider`, `RIFE VFI`, `ShowText|pysssss`,
+   `Power Lora Loader (rgthree)`, `CRT Post-Process Suite` (CRT-Nodes),
+   `FameGridColorFinish`, `TextEncodeEditAdvanced` and
+   `CannyEdgePreprocessor` (comfyui_controlnet_aux). ComfyUI-Manager
+   registers no nodes, so it has no entry.
 10. `EXPOSE 8188 8888`, `CMD ["/start.sh"]`.
 
 Version labels (`org.opencontainers.image.*`) record ComfyUI tag, torch and
@@ -125,18 +162,24 @@ SageAttention versions.
 | --- | --- | --- |
 | `/opt/ComfyUI` | image | ComfyUI + custom nodes, read-mostly |
 | `/opt/venv` | image | Python |
-| `/workspace/models/<category>` | volume | all models; `extra_model_paths.yaml` sets `is_default: true` so ComfyUI reads and writes here |
+| `/workspace/models/<category>` | volume | all models; ComfyUI runs with `--models-directory /workspace/models` |
 | `/workspace/output`, `/workspace/input` | volume | `--output-directory`, `--input-directory` |
 | `/workspace/user` | volume | `--user-directory`: saved workflows, settings |
 | `/workspace/logs/comfyui.log` | volume | ComfyUI + downloader log |
 | `/workspace/.cache/huggingface` | volume | `HF_HOME`, holds the Xet chunk cache |
 | `/workspace/models_config.json` | volume | the effective model list (see below) |
 
-`extra_model_paths.yaml` lists the 26 model folder names ComfyUI v0.36.0
-registers in `folder_paths.py` (legacy `clip`/`unet` are aliases of
-`text_encoders`/`diffusion_models`; `ipadapter` belongs to a node that is not
-installed) under `base_path: /workspace/models`. `start.sh` creates all of
-them, and a test asserts the two lists match.
+ComfyUI runs with `--models-directory /workspace/models`, which sets
+`folder_paths.models_dir` before any custom node loads. That matters because
+Impact-Pack registers `sams` and `onnx`, and Impact-Subpack `ultralytics/bbox`
+and `ultralytics/segm`, relative to `models_dir` at import; an
+`extra_model_paths.yaml` (used before) cannot move those. `start.sh` creates
+the 26 model folder names ComfyUI v0.36.0 registers in `folder_paths.py`
+(legacy `clip`/`unet` are aliases of `text_encoders`/`diffusion_models`;
+`ipadapter` belongs to a node that is not installed) plus those four, and a
+test asserts the list equals `tests/constants.py`. `datasets` is the
+exception: v0.36.0 resolves it from `base_path`, not `models_dir`, so it is
+`/opt/ComfyUI/datasets` in the image.
 
 ## start.sh
 
@@ -167,7 +210,7 @@ ComfyUI command:
 ```
 python main.py --listen 0.0.0.0 --port 8188 \
   --output-directory /workspace/output --input-directory /workspace/input \
-  --user-directory /workspace/user \
+  --user-directory /workspace/user --models-directory /workspace/models \
   [--use-sage-attention]   # default on
   $COMFYUI_EXTRA_ARGS
 ```
@@ -220,9 +263,24 @@ either a URL string (filename = last path segment) or an object
     {"url": "https://civitai.com/api/download/models/2760799?fileId=2647078", "filename": "HighResolution9B.safetensors"},
     {"url": "https://civitai.com/api/download/models/2777498?fileId=2663630", "filename": "Samsung_fluxklein9b.safetensors"},
     {"url": "https://civitai.com/api/download/models/2863285?fileId=2747224", "filename": "f2k_9B_lcs_consist_20260415.safetensors"}
+  ],
+  "ultralytics/bbox": [
+    "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt",
+    "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8s.pt"
+  ],
+  "ultralytics/segm": [
+    "https://huggingface.co/Bingsu/adetailer/resolve/main/person_yolov8m-seg.pt"
+  ],
+  "sams": [
+    "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
   ]
 }
 ```
+
+The last four (about 0.5 GB) are the detector and SAM models Impact-Pack's
+installers would otherwise download into the image; OnyxDetailer uses them. A
+category may be nested (`ultralytics/bbox`); one that is absolute or has a
+`..` segment is logged as an error and skipped.
 
 `f2k_9B_lcs_consist_20260415` is the newest Klein 9B version of "Consistence
 Edit Lora"; the customer's link named no version.
@@ -273,11 +331,12 @@ GitHub repository: `poomshift/comfyui-runpod-jnkprod`.
   `utils/civitai` header/filename logic, `download_models` config parsing
   (string vs object entries, skip-existing, unknown category warning),
   token redaction. Network calls mocked.
-- **Build-time**: the import smoke test and `--quick-test-for-ci` run inside
+- **Build-time**: the import smoke test and `docker/smoke_test.sh` run inside
   `docker build`, so a green CI build proves every custom node imports against
-  torch 2.13.
+  torch 2.13 and every node's `INPUT_TYPES` answers through `/object_info`.
+  The script itself is tested locally with stub `python` and `curl`.
 - **Pod acceptance (manual, on RunPod)**: start the template with `HF_TOKEN`
-  and `CIVITAI_TOKEN`; expect JupyterLab within ~30 s, all 7 files under
+  and `CIVITAI_TOKEN`; expect JupyterLab within ~30 s, all 11 files under
   `/workspace/models` after the download, ComfyUI on 8188 with
   `--use-sage-attention` in its startup log, a Klein 9B workflow running
   end-to-end. Restart the pod and confirm nothing is re-downloaded.
@@ -294,6 +353,14 @@ GitHub repository: `poomshift/comfyui-runpod-jnkprod`.
   asked for it.
 - **mediapipe** (comfyui_controlnet_aux) latest 1.0.x has no cp312 Linux wheel;
   pip will resolve an older 0.10.x. Only affects a few preprocessors.
+- **Frame-Interpolation checkpoints**: RIFE weights (also for Onyx's batched
+  RIFE node) download at first use into
+  `custom_nodes/ComfyUI-Frame-Interpolation/ckpts/` on the container disk, not
+  the volume, so they download again whenever the container disk is reset.
+  Out of scope for now.
+- **SAM 2 without CUDA kernels**: `SAM2_BUILD_CUDA=0` skips SAM 2's optional
+  CUDA extension; upstream says some post-processing may be limited, which
+  does not affect results in most cases.
 - **SageAttention wheel**: built and uploaded (see version table). Upstream
   v2.2.0 `setup.py` compiles the Hopper-only sm90 extension for every arch;
   the build script patches it to sm_90a only. Rebuild needed only if torch
